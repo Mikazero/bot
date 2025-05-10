@@ -26,9 +26,12 @@ COPY application.yml .
 # Exponer el puerto
 EXPOSE 2333
 
+# Volver al directorio del bot
+WORKDIR /app
+
 # Script de inicio
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# Comando para ejecutar tanto Lavalink como el bot
+# Comando por defecto (será sobrescrito por Railway)
 CMD ["/start.sh"]
