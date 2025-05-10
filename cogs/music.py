@@ -17,12 +17,11 @@ class Music(commands.Cog):
     async def connect_nodes(self):
         """Conecta a los nodos de Lavalink"""
         await self.bot.wait_until_ready()
-        await wavelink.NodePool.create_node(
-            bot=self.bot,
-            host=os.getenv('LAVALINK_HOST', '127.0.0.1'),  # Host de Lavalink
-            port=int(os.getenv('LAVALINK_PORT', '2333')),  # Puerto de Lavalink
-            password=os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')  # Contraseña de Lavalink
+        node = wavelink.Node(
+            uri=f"http://{os.getenv('LAVALINK_HOST', '127.0.0.1')}:{os.getenv('LAVALINK_PORT', '2333')}",
+            password=os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')
         )
+        await wavelink.NodePool.connect(client=self.bot, nodes=[node])
 
     def get_queue(self, guild_id: int) -> list:
         """Obtiene la cola de reproducción del servidor"""
