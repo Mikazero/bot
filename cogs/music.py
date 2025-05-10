@@ -34,7 +34,7 @@ class Music(commands.Cog):
         return str(timedelta(milliseconds=milliseconds)).split('.')[0]
 
     @commands.Cog.listener()
-    async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
+    async def on_wavelink_track_end(self, payload: wavelink.TrackEventPayload):
         """Evento que se dispara cuando termina una canción"""
         if not payload.player:
             return
