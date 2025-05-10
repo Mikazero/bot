@@ -4,6 +4,9 @@ server:
 spring:
   main:
     banner-mode: log
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
 lavalink:
   server:
     password: youshallnotpass
@@ -20,4 +23,31 @@ lavalink:
     playerUpdateInterval: 5
     youtubeSearchEnabled: true
     soundcloudSearchEnabled: true
-    gc-warnings: true 
+    gc-warnings: true
+    metrics:
+      prometheus:
+        enabled: false
+    sentry:
+      dsn: ""
+    opusEncodingQuality: 10
+    resamplingQuality: LOW
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    youtubeConfig:
+      email: ""
+      password: ""
+    ratelimit:
+      ipBlocks: []
+      excludedIps: []
+      strategy: "RotateOnBan"
+    filters:
+      volume: true
+      equalizer: true
+      karaoke: true
+      timescale: true
+      tremolo: true
+      vibrato: true
+      rotation: true
+      distortion: true
+      channelMix: true
+      lowPass: true 

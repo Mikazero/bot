@@ -7,9 +7,9 @@ LAVALINK_PID=$!
 
 # Esperar a que Lavalink inicie
 echo "Esperando a que Lavalink inicie..."
-sleep 15
+sleep 20
 
-# Verificar que Lavalink está corriendo y escuchando en el puerto
+# Verificar que Lavalink está corriendo
 if ! ps -p $LAVALINK_PID > /dev/null; then
     echo "Error: Lavalink no pudo iniciar"
     exit 1
@@ -18,6 +18,12 @@ fi
 # Verificar que el puerto está abierto
 if ! netstat -tuln | grep -q ":2333"; then
     echo "Error: Lavalink no está escuchando en el puerto 2333"
+    exit 1
+fi
+
+# Verificar que Lavalink está respondiendo
+if ! curl -s http://localhost:2333/version > /dev/null; then
+    echo "Error: Lavalink no está respondiendo en el puerto 2333"
     exit 1
 fi
 
