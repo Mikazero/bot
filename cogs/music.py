@@ -18,8 +18,8 @@ class Music(commands.Cog):
         """Conecta a los nodos de Lavalink"""
         await self.bot.wait_until_ready()
         node = wavelink.Node(
-            uri=f"http://{os.getenv('LAVALINK_HOST', '127.0.0.1')}:{os.getenv('LAVALINK_PORT', '2333')}",
-            password=os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')
+            uri=f"http://localhost:2333",
+            password="youshallnotpass"
         )
         await wavelink.NodePool.connect(client=self.bot, nodes=[node])
 
