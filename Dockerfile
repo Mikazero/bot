@@ -5,7 +5,7 @@ WORKDIR /opt/Lavalink
 RUN apk add --no-cache curl
 
 # Descargar Lavalink
-RUN curl -L https://github.com/freyacodes/Lavalink/releases/download/4.0.0/Lavalink.jar -o Lavalink.jar
+RUN curl -L https://github.com/lavalink-devs/Lavalink/releases/download/4.0.0/Lavalink.jar -o Lavalink.jar
 
 # Crear el archivo de configuración
 COPY application.yml .
