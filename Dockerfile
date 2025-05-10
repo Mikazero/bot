@@ -6,6 +6,15 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
+
+# Copiar los archivos del bot
+COPY . .
+
+# Instalar dependencias del bot
+RUN pip install -r requirements.txt
+
+# Crear directorio para Lavalink
 WORKDIR /opt/Lavalink
 
 # Descargar Lavalink
@@ -17,5 +26,9 @@ COPY application.yml .
 # Exponer el puerto
 EXPOSE 2333
 
-# Comando para ejecutar Lavalink
-CMD ["java", "-jar", "Lavalink.jar"]
+# Script de inicio
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Comando para ejecutar tanto Lavalink como el bot
+CMD ["/start.sh"]
