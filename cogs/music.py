@@ -21,7 +21,7 @@ class Music(commands.Cog):
             uri=f"http://{os.getenv('LAVALINK_HOST', '127.0.0.1')}:{os.getenv('LAVALINK_PORT', '2333')}",
             password=os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')
         )
-        await wavelink.NodePool.connect(client=self.bot, nodes=[node])
+        await wavelink.connect(nodes=[node])
 
     def get_queue(self, guild_id: int) -> list:
         """Obtiene la cola de reproducción del servidor"""
@@ -61,7 +61,7 @@ class Music(commands.Cog):
         msg = await ctx.send(embed=embed)
 
         try:
-            tracks = await wavelink.NodePool.get_node().get_tracks(query=search)
+            tracks = await wavelink.search(search)
             if not tracks:
                 await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados", color=config.EMBED_COLOR))
                 return
