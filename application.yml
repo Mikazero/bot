@@ -1,0 +1,23 @@
+server:
+  port: ${PORT:2333}
+  address: 0.0.0.0
+spring:
+  main:
+    banner-mode: log
+lavalink:
+  server:
+    password: ${LAVALINK_PASSWORD:youshallnotpass}
+    sources:
+      youtube: true
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      http: true
+    bufferDurationMs: 400
+    frameBufferDurationMs: 1000
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    gc-warnings: true 

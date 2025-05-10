@@ -101,41 +101,62 @@ class Search(commands.Cog):
 
     # ------------------ Comando CONVERT prefijo ------------------
     @commands.command(name='convert')
-    async def convert(self, ctx, cantidad: float, origen: str, destino: str):
+    async def convert(self, ctx, *, mensaje: str):
         try:
-            url = f'https://api.exchangerate-api.com/v4/latest/{origen.upper()}'
+            # Dividir el mensaje en partes usando "to" como separador
+            partes = mensaje.split(" to ")
+            if len(partes) != 2:
+                await ctx.send('Formato incorrecto. Usa: g.convert [cantidad] [moneda origen] to [moneda destino]')
+                return
+
+            # Obtener la cantidad y la moneda de origen
+            primera_parte = partes[0].strip().split()
+            if len(primera_parte) != 2:
+                await ctx.send('Formato incorrecto. Usa: g.convert [cantidad] [moneda origen] to [moneda destino]')
+                return
+
+            try:
+                cantidad = float(primera_parte[0])
+            except ValueError:
+                await ctx.send('La cantidad debe ser un número válido.')
+                return
+
+            origen = primera_parte[1].upper()
+            destino = partes[1].strip().upper()
+
+            url = f'https://api.exchangerate-api.com/v4/latest/{origen}'
             response = requests.get(url)
             data = response.json()
             tasas = data["rates"]
 
-            if destino.upper() in tasas:
-                relacion = tasas[destino.upper()] / tasas[origen.upper()]
+            if destino in tasas:
+                relacion = tasas[destino] / tasas[origen]
                 resultado = cantidad * relacion
 
                 embed = discord.Embed(
                     title="Conversión",
-                    description=f"{origen.upper()} a {destino.upper()}",
+                    description=f"{origen} a {destino}",
                     color=discord.Color.teal()
                 )
-                embed.add_field(name="Relación", value=f"1 {origen.upper()} = {relacion:.4f} {destino.upper()}", inline=False)
-                embed.add_field(name="Conversión", value=f"{cantidad} {origen.upper()} son {resultado:.2f} {destino.upper()}", inline=False)
+                embed.add_field(name="Relación", value=f"1 {origen} = {relacion:.4f} {destino}", inline=False)
+                embed.add_field(name="Conversión", value=f"{cantidad} {origen} son {resultado:.2f} {destino}", inline=False)
                 embed.set_footer(text="Información obtenida de Exchange Rate API")
 
                 await ctx.send(embed=embed)
             else:
-                await ctx.send(f'No se encontró la tasa de cambio para {destino.upper()}.')
+                await ctx.send(f'No se encontró la tasa de cambio para {destino}.')
 
         except KeyError:
-            await ctx.send(f'No se encontró la divisa {origen.upper()} o {destino.upper()}.')
+            await ctx.send(f'No se encontró la divisa {origen} o {destino}.')
         except Exception as e:
             await ctx.send(f'Ocurrió un error: {e}')
 
     # ------------------ Comando CONVERT slash -------------------
     @app_commands.command(name="convert", description="Convierte una cantidad de una moneda a otra.")
-    @app_commands.describe(cantidad="Cantidad a convertir.", origen="Moneda de origen.", destino="Moneda de destino.")
-    async def convert_slash(self, interaction: discord.Interaction, cantidad: float, origen: str, destino: str):
+    @app_commands.describe(mensaje="Formato: [cantidad] [moneda origen] to [moneda destino]")
+    async def convert_slash(self, interaction: discord.Interaction, mensaje: str):
         ctx = await self.bot.get_context(interaction)
-        await self.convert(ctx, cantidad, origen, destino)
+        await self.convert(ctx, mensaje=mensaje)
 
     # ------------------ Comando IMG prefijo ------------------
     @commands.command(name='img')
