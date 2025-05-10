@@ -21,7 +21,7 @@ class Music(commands.Cog):
             uri="http://localhost:2333",
             password="youshallnotpass"
         )
-        await wavelink.Pool.connect(nodes=[node], client=self.bot, cache_expiry=0)
+        await wavelink.Pool.connect(nodes=[node], client=self.bot)
 
     def get_queue(self, guild_id: int) -> list[wavelink.Playable]:
         """Obtiene la cola de reproducción del servidor"""
