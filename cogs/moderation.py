@@ -4,6 +4,7 @@ from discord import app_commands
 import config
 import asyncio
 from datetime import datetime, timedelta
+import re # Añadido para parsear la duración
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
@@ -73,29 +74,139 @@ class Moderation(commands.Cog):
 
     @commands.command(name="mute")
     @commands.has_permissions(manage_roles=True)
-    async def mute(self, ctx, member: discord.Member, time: int = 0, *, reason: str = None):
+    async def mute(self, ctx, member: discord.Member, *time_and_reason_parts):
         if member.top_role >= ctx.author.top_role:
             await ctx.send("❌ No puedes mutear a alguien con un rol igual o superior al tuyo.")
+            return
+        if member == ctx.guild.me:
+            await ctx.send("❌ No me puedo mutear a mí mismo.")
             return
 
         muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
         if not muted_role:
-            muted_role = await ctx.guild.create_role(name="Muted")
-            for channel in ctx.guild.channels:
-                await channel.set_permissions(muted_role, speak=False, send_messages=False)
+            try:
+                muted_role = await ctx.guild.create_role(name="Muted", reason="Rol para usuarios muteados")
+                for channel in ctx.guild.text_channels:
+                    await channel.set_permissions(muted_role, send_messages=False, reason="Configuración del rol Muted")
+                for channel in ctx.guild.voice_channels:
+                    await channel.set_permissions(muted_role, speak=False, reason="Configuración del rol Muted")
+            except discord.Forbidden:
+                await ctx.send("❌ No tengo permisos para crear o configurar el rol 'Muted'. Revisa mis permisos.")
+                return
+            except Exception as e:
+                await ctx.send(f"❌ Ocurrió un error al crear/configurar el rol 'Muted': {e}")
+                return
 
-        await member.add_roles(muted_role)
+        duration_seconds = 10 * 60  # Default 10 minutos
+        human_readable_duration = "10 minutos"
+        reason = None
         
-        if time > 0:
-            self.muted_users[member.id] = ctx.guild.id
-            await asyncio.sleep(time)
-            if member.id in self.muted_users:
-                await member.remove_roles(muted_role)
-                del self.muted_users[member.id]
+        args_list = list(time_and_reason_parts)
+        reason_parts_list = []
+
+        if not args_list:
+            # No time/reason provided, use default 10 minutes, reason is None
+            pass
+        else:
+            first_arg = args_list[0]
+            potential_reason_args = args_list[1:] # Arguments after the first one
+
+            match_combined = re.fullmatch(r"(\d+)([mhd])", first_arg, re.IGNORECASE)
+            match_numeric = re.fullmatch(r"(\d+)", first_arg)
+
+            parsed_time_successfully = False
+            if match_combined:
+                value = int(match_combined.group(1))
+                unit = match_combined.group(2).lower()
+                if unit == 'm':
+                    duration_seconds = value * 60
+                    human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
+                elif unit == 'h':
+                    duration_seconds = value * 3600
+                    human_readable_duration = f"{value} hora" if value == 1 else f"{value} horas"
+                elif unit == 'd':
+                    duration_seconds = value * 86400
+                    human_readable_duration = f"{value} día" if value == 1 else f"{value} días"
+                reason_parts_list = potential_reason_args
+                parsed_time_successfully = True
+            elif match_numeric and potential_reason_args and potential_reason_args[0].lower() in ['m', 'h', 'd']:
+                value = int(match_numeric.group(1))
+                unit = potential_reason_args[0].lower()
+                reason_parts_list = potential_reason_args[1:] # Arguments after the unit
+                if unit == 'm':
+                    duration_seconds = value * 60
+                    human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
+                elif unit == 'h':
+                    duration_seconds = value * 3600
+                    human_readable_duration = f"{value} hora" if value == 1 else f"{value} horas"
+                elif unit == 'd':
+                    duration_seconds = value * 86400
+                    human_readable_duration = f"{value} día" if value == 1 else f"{value} días"
+                parsed_time_successfully = True
+            elif match_numeric: # Only a number, interpret as minutes
+                value = int(match_numeric.group(1))
+                duration_seconds = value * 60
+                human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
+                reason_parts_list = potential_reason_args
+                parsed_time_successfully = True
+            
+            if not parsed_time_successfully: # If no time was parsed, all args are reason
+                reason_parts_list = args_list
+            
+            if reason_parts_list:
+                reason = " ".join(reason_parts_list)
+
+        if muted_role in member.roles:
+            # User is already muted, we will update the mute duration/reason
+            # Cancel any existing unmute task for this user in this guild
+            old_task_marker = self.muted_users.pop((member.id, ctx.guild.id), None)
+            # If we were storing actual asyncio.Task objects, we would cancel it:
+            # if old_task_marker and isinstance(old_task_marker, asyncio.Task):
+            #     old_task_marker.cancel()
+            pass
+
+
+        try:
+            await member.add_roles(muted_role, reason=reason)
+        except discord.Forbidden:
+            await ctx.send(f"❌ No tengo permisos para añadir el rol 'Muted' a {member.mention}.")
+            return
+        except Exception as e:
+            await ctx.send(f"❌ Ocurrió un error al intentar mutear a {member.mention}: {e}")
+            return
+        
+        embed_description = f"{member.mention} fue muteado."
+        if reason:
+            embed_description += f"\\nMotivo: {reason}"
+        
+        current_mute_marker = object() # Unique marker for this mute instance
+
+        if duration_seconds > 0:
+            embed_description += f"\\nDuración: {human_readable_duration}"
+            self.muted_users[(member.id, ctx.guild.id)] = current_mute_marker
+            
+            await asyncio.sleep(duration_seconds)
+            
+            # Check if this mute instance is still the active one before unmuting
+            if self.muted_users.get((member.id, ctx.guild.id)) == current_mute_marker:
+                if muted_role in member.roles: # Check if still has role (wasn't manually unmuted)
+                    try:
+                        await member.remove_roles(muted_role, reason="Tiempo de mute expirado")
+                    except discord.HTTPException: # Covers NotFound, Forbidden
+                        pass # Member might have left, or bot lost perms
+                # Clean up the entry whether role removal succeeded or not, as this task is done
+                self.muted_users.pop((member.id, ctx.guild.id), None)
+        else: # Duration is 0 or less, treat as effectively permanent (or until manual unmute)
+              # This path is taken if user specifies "0m", "0h", "0d".
+            embed_description += "\\nDuración: Indefinida (hasta desmuteo manual, o tiempo 0 especificado)"
+            # No task is scheduled, user remains muted with the role.
+            # We can remove from self.muted_users if they were there from a previous timed mute
+            self.muted_users.pop((member.id, ctx.guild.id), None)
+
 
         embed = discord.Embed(
             title="🔇 Usuario muteado",
-            description=f"{member.mention} fue muteado.\nDuración: {time}s\nMotivo: {reason}",
+            description=embed_description,
             color=config.EMBED_COLOR,
             timestamp=datetime.now()
         )
@@ -106,20 +217,26 @@ class Moderation(commands.Cog):
     @commands.has_permissions(manage_roles=True)
     async def unmute(self, ctx, member: discord.Member):
         muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-        if muted_role in member.roles:
-            await member.remove_roles(muted_role)
-            if member.id in self.muted_users:
-                del self.muted_users[member.id]
-            embed = discord.Embed(
-                title="🔊 Usuario desmuteado",
-                description=f"{member.mention} ha sido desmuteado.",
-                color=config.EMBED_COLOR,
-                timestamp=datetime.now()
-            )
-            embed.set_footer(text=f"Desmuteado por {ctx.author}")
-            await ctx.send(embed=embed)
+        if muted_role and muted_role in member.roles:
+            try:
+                await member.remove_roles(muted_role, reason=f"Desmuteado manualmente por {ctx.author}")
+                # If there was an active timed mute task, remove its marker so it doesn't try to unmute again
+                self.muted_users.pop((member.id, ctx.guild.id), None)
+                
+                embed = discord.Embed(
+                    title="🔊 Usuario desmuteado",
+                    description=f"{member.mention} ha sido desmuteado.",
+                    color=config.EMBED_COLOR,
+                    timestamp=datetime.now()
+                )
+                embed.set_footer(text=f"Desmuteado por {ctx.author}")
+                await ctx.send(embed=embed)
+            except discord.Forbidden:
+                await ctx.send(f"❌ No tengo permisos para desmutear a {member.mention}.")
+            except Exception as e:
+                await ctx.send(f"❌ Ocurrió un error al intentar desmutear a {member.mention}: {e}")
         else:
-            await ctx.send("❌ Este usuario no está muteado.")
+            await ctx.send("❌ Este usuario no está muteado o el rol 'Muted' no existe.")
 
     @commands.command(name="purge")
     @commands.has_permissions(manage_messages=True)

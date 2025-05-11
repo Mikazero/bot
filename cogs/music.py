@@ -71,38 +71,82 @@ class Music(commands.Cog):
         else:
             player = ctx.voice_client
 
-        embed = discord.Embed(title="⏳ Buscando música...", description=search, color=discord.Color.blue())
+        embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=discord.Color.blue())
         msg = await ctx.send(embed=embed)
 
         try:
-            tracks: list[wavelink.Playable] | None = await wavelink.Playable.search(search)
-            if not tracks:
-                await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados", color=discord.Color.blue()))
+            results: wavelink.Playlist | list[wavelink.Playable] | None = await wavelink.Playable.search(search)
+            
+            if not results:
+                await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados.", description=f"No pude encontrar nada para: `{search}`", color=discord.Color.red()))
                 return
 
-            track: wavelink.Playable = tracks[0]
-            
             queue = self.get_queue(ctx.guild.id)
 
-            if player.current:
-                queue.append(track)
-                embed = discord.Embed(
-                    title="🎵 Añadida a la cola",
-                    description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
-                    color=discord.Color.blue()
-                )
-                await msg.edit(embed=embed)
-            else:
-                await player.play(track)
-                embed = discord.Embed(
-                    title="▶️ Reproduciendo",
-                    description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
-                    color=discord.Color.blue()
-                )
-                await msg.edit(embed=embed)
+            if isinstance(results, wavelink.Playlist):
+                playlist = results
+                if not playlist.tracks:
+                    await msg.edit(embed=discord.Embed(title=f"❌ La playlist '{playlist.name}' está vacía o no se pudo cargar.", color=discord.Color.red()))
+                    return
+
+                tracks_from_playlist = playlist.tracks
+                num_tracks = len(tracks_from_playlist)
+                playlist_name = playlist.name if playlist.name else "Playlist sin nombre"
+
+                if player.current: # Player is busy
+                    for track_in_playlist in tracks_from_playlist:
+                        queue.append(track_in_playlist)
+                    embed = discord.Embed(
+                        title="🎵 Playlist añadida a la cola",
+                        description=f"Se añadieron {num_tracks} canciones de **{playlist_name}** a la cola.",
+                        color=discord.Color.blue()
+                    )
+                    await msg.edit(embed=embed)
+                else: # Player is idle, play first and queue rest
+                    first_track = tracks_from_playlist[0]
+                    await player.play(first_track)
+                    
+                    for track_in_playlist in tracks_from_playlist[1:]:
+                        queue.append(track_in_playlist)
+                    
+                    desc = f"Empezando con: **{first_track.title}** ({self.format_time(first_track.length)})"
+                    if num_tracks > 1:
+                        desc += f"\\n{num_tracks - 1} más canciones de **{playlist_name}** añadidas a la cola."
+                    else:
+                        desc += f"\\nEs la única canción de la playlist **{playlist_name}**."
+
+                    embed = discord.Embed(
+                        title=f"▶️ Reproduciendo playlist: {playlist_name}",
+                        description=desc,
+                        color=discord.Color.blue()
+                    )
+                    await msg.edit(embed=embed)
+
+            elif isinstance(results, list): # List of Playable tracks
+                track: wavelink.Playable = results[0] # Take the first result
+                
+                if player.current:
+                    queue.append(track)
+                    embed = discord.Embed(
+                        title="🎵 Añadida a la cola",
+                        description=f"**{track.title}**\\nDuración: {self.format_time(track.length)}",
+                        color=discord.Color.blue()
+                    )
+                    await msg.edit(embed=embed)
+                else:
+                    await player.play(track)
+                    embed = discord.Embed(
+                        title="▶️ Reproduciendo",
+                        description=f"**{track.title}**\\nDuración: {self.format_time(track.length)}",
+                        color=discord.Color.blue()
+                    )
+                    await msg.edit(embed=embed)
+            else: # Should ideally not be reached if search returns Playlist, list[Playable] or None
+                await msg.edit(embed=discord.Embed(title="❌ Formato de resultado inesperado.", color=discord.Color.red()))
+                return
 
         except Exception as e:
-            await msg.edit(embed=discord.Embed(title="❌ Error", description=str(e), color=discord.Color.blue()))
+            await msg.edit(embed=discord.Embed(title="❌ Error", description=f"Ocurrió un error: {str(e)}", color=discord.Color.red()))
             print(f"Error en play: {e}")
 
     @commands.command(name="stop")
