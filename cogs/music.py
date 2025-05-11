@@ -2,11 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import wavelink
-import config
+import os
 from typing import Optional
 import asyncio
 from datetime import timedelta
-import os
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -17,10 +16,14 @@ class Music(commands.Cog):
     async def connect_nodes(self):
         """Conecta a los nodos de Lavalink"""
         await self.bot.wait_until_ready()
+
+        lavalink_uri = os.environ.get("LAVALINK_URI", "http://127.0.0.1:2333")
+        lavalink_password = os.environ.get("LAVALINK_PASSWORD", "youshallnotpass")
+
         nodes = [
             wavelink.Node(
-                uri="http://127.0.0.1:2333",
-                password="youshallnotpass",
+                uri=lavalink_uri,
+                password=lavalink_password,
             )
         ]
         await wavelink.Pool.connect(nodes=nodes, client=self.bot, cache_capacity=100)
@@ -68,13 +71,13 @@ class Music(commands.Cog):
         else:
             player = ctx.voice_client
 
-        embed = discord.Embed(title="⏳ Buscando música...", description=search, color=config.EMBED_COLOR)
+        embed = discord.Embed(title="⏳ Buscando música...", description=search, color=discord.Color.blue())
         msg = await ctx.send(embed=embed)
 
         try:
             tracks: list[wavelink.Playable] | None = await wavelink.Playable.search(search)
             if not tracks:
-                await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados", color=config.EMBED_COLOR))
+                await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados", color=discord.Color.blue()))
                 return
 
             track: wavelink.Playable = tracks[0]
@@ -86,7 +89,7 @@ class Music(commands.Cog):
                 embed = discord.Embed(
                     title="🎵 Añadida a la cola",
                     description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
-                    color=config.EMBED_COLOR
+                    color=discord.Color.blue()
                 )
                 await msg.edit(embed=embed)
             else:
@@ -94,12 +97,12 @@ class Music(commands.Cog):
                 embed = discord.Embed(
                     title="▶️ Reproduciendo",
                     description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
-                    color=config.EMBED_COLOR
+                    color=discord.Color.blue()
                 )
                 await msg.edit(embed=embed)
 
         except Exception as e:
-            await msg.edit(embed=discord.Embed(title="❌ Error", description=str(e), color=config.EMBED_COLOR))
+            await msg.edit(embed=discord.Embed(title="❌ Error", description=str(e), color=discord.Color.blue()))
             print(f"Error en play: {e}")
 
     @commands.command(name="stop")
@@ -113,7 +116,7 @@ class Music(commands.Cog):
         if ctx.guild.id in self.queues:
             self.queues[ctx.guild.id] = []
         
-        embed = discord.Embed(title="⏹️ Música detenida", color=config.EMBED_COLOR)
+        embed = discord.Embed(title="⏹️ Música detenida", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(name="pause")
@@ -128,7 +131,7 @@ class Music(commands.Cog):
             return
 
         await player.pause(True)
-        embed = discord.Embed(title="⏸️ Música pausada", color=config.EMBED_COLOR)
+        embed = discord.Embed(title="⏸️ Música pausada", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(name="resume")
@@ -143,7 +146,7 @@ class Music(commands.Cog):
             return
 
         await player.pause(False)
-        embed = discord.Embed(title="▶️ Música reanudada", color=config.EMBED_COLOR)
+        embed = discord.Embed(title="▶️ Música reanudada", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(name="skip")
@@ -157,10 +160,10 @@ class Music(commands.Cog):
         if queue:
             next_track = queue.pop(0)
             await player.play(next_track)
-            embed = discord.Embed(title="⏭️ Canción saltada, reproduciendo la siguiente.", description=f"Ahora reproduciendo: **{next_track.title}**", color=config.EMBED_COLOR)
+            embed = discord.Embed(title="⏭️ Canción saltada, reproduciendo la siguiente.", description=f"Ahora reproduciendo: **{next_track.title}**", color=discord.Color.blue())
         else:
             await player.stop()
-            embed = discord.Embed(title="⏭️ Canción saltada. No hay más canciones en la cola.", color=config.EMBED_COLOR)
+            embed = discord.Embed(title="⏭️ Canción saltada. No hay más canciones en la cola.", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(name="queue")
@@ -177,7 +180,7 @@ class Music(commands.Cog):
             await ctx.send("❌ No hay canciones en la cola ni reproduciéndose.")
             return
         
-        embed = discord.Embed(title="🎵 Cola de reproducción", color=config.EMBED_COLOR)
+        embed = discord.Embed(title="🎵 Cola de reproducción", color=discord.Color.blue())
         
         if current_track:
             embed.add_field(

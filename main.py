@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import wavelink
-import config
+import os
 
 
 intents = discord.Intents.default()
@@ -40,4 +40,4 @@ async def setup_hook():
 
 # --------- ARRANQUE DEL BOT ----------
 if __name__ == '__main__':
-    bot.run(config.DISCORD_TOKEN)
+    bot.run(os.environ.get("DISCORD_TOKEN"))
