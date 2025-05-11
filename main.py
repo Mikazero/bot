@@ -31,6 +31,13 @@ async def setup_hook():
     await bot.load_extension('cogs.moderation')
     # Recuerda: el nombre es el "path" relativo: carpeta + nombre archivo (sin .py)
 
+    # Sincroniza los comandos de la aplicación (slash commands)
+    try:
+        synced = await bot.tree.sync()
+        print(f"Sincronizados {len(synced)} comandos de aplicación.")
+    except Exception as e:
+        print(f"Error al sincronizar comandos de aplicación: {e}")
+
 # --------- ARRANQUE DEL BOT ----------
 if __name__ == '__main__':
     bot.run(config.DISCORD_TOKEN)

@@ -79,7 +79,7 @@ class Music(commands.Cog):
             
             queue = self.get_queue(ctx.guild.id)
 
-            if player.is_playing() or player.is_paused():
+            if player.current:
                 queue.append(track)
                 embed = discord.Embed(
                     title="🎵 Añadida a la cola",
@@ -117,42 +117,38 @@ class Music(commands.Cog):
     @commands.command(name="pause")
     async def pause_(self, ctx: commands.Context):
         player: wavelink.Player | None = ctx.voice_client
-        if not player:
-            await ctx.send("❌ No estoy reproduciendo música.")
+        if not player or not player.current:
+            await ctx.send("❌ No hay música reproduciéndose para pausar.")
             return
 
-        if player.is_paused():
+        if player.paused:
             await ctx.send("❌ La música ya está pausada.")
             return
 
-        await player.pause()
+        await player.pause(True)
         embed = discord.Embed(title="⏸️ Música pausada", color=config.EMBED_COLOR)
         await ctx.send(embed=embed)
 
     @commands.command(name="resume")
     async def resume_(self, ctx: commands.Context):
         player: wavelink.Player | None = ctx.voice_client
-        if not player:
-            await ctx.send("❌ No estoy reproduciendo música.")
+        if not player or not player.current:
+            await ctx.send("❌ No hay música pausada para reanudar.")
             return
 
-        if not player.is_paused():
+        if not player.paused:
             await ctx.send("❌ La música no está pausada.")
             return
 
-        await player.resume()
+        await player.pause(False)
         embed = discord.Embed(title="▶️ Música reanudada", color=config.EMBED_COLOR)
         await ctx.send(embed=embed)
 
     @commands.command(name="skip")
     async def skip_(self, ctx: commands.Context):
         player: wavelink.Player | None = ctx.voice_client
-        if not player:
-            await ctx.send("❌ No estoy reproduciendo música.")
-            return
-
-        if not player.is_playing() and not player.is_paused():
-            await ctx.send("❌ No hay música reproduciéndose.")
+        if not player or not player.current:
+            await ctx.send("❌ No hay música reproduciéndose para saltar.")
             return
 
         queue = self.get_queue(ctx.guild.id)
@@ -169,23 +165,24 @@ class Music(commands.Cog):
     async def queue_(self, ctx: commands.Context):
         player: wavelink.Player | None = ctx.voice_client
         if not player:
-            await ctx.send("❌ No estoy reproduciendo música.")
+            await ctx.send("❌ No estoy conectado a un canal de voz.")
             return
 
         queue = self.get_queue(ctx.guild.id)
+        current_track = player.current
+
+        if not current_track and not queue:
+            await ctx.send("❌ No hay canciones en la cola ni reproduciéndose.")
+            return
         
         embed = discord.Embed(title="🎵 Cola de reproducción", color=config.EMBED_COLOR)
         
-        current_track = player.current
         if current_track:
             embed.add_field(
                 name="▶️ Reproduciendo ahora",
                 value=f"**{current_track.title}**\nDuración: {self.format_time(current_track.length)}",
                 inline=False
             )
-        elif not queue:
-            await ctx.send("❌ No hay canciones en la cola ni reproduciéndose.")
-            return
 
         if queue:
             total_duration = sum(track.length for track in queue if track.length is not None)
@@ -198,7 +195,7 @@ class Music(commands.Cog):
             
             embed.add_field(
                 name="📋 Próximas canciones",
-                value=queue_text if queue_text else "Nada en la cola.",
+                value=queue_text if queue_text else "Nada más en la cola.",
                 inline=False
             )
             if total_duration > 0:
@@ -208,40 +205,69 @@ class Music(commands.Cog):
                     inline=False
                 )
         elif not current_track:
-            embed.description = "La cola está vacía."
+            embed.description = "La cola está vacía y nada se está reproduciendo."
 
         await ctx.send(embed=embed)
 
     # Slash commands
     @app_commands.command(name="play", description="Reproduce música de YouTube o Spotify!")
     async def play_slash(self, interaction: discord.Interaction, search: str):
-        ctx = await self.bot.get_context(interaction)
-        ctx.author = interaction.user
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.play_(ctx, search=search)
 
     @app_commands.command(name="stop", description="Detén la música.")
     async def stop_slash(self, interaction: discord.Interaction):
-        ctx = await self.bot.get_context(interaction)
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.stop_(ctx)
 
     @app_commands.command(name="pause", description="Pausa la música.")
     async def pause_slash(self, interaction: discord.Interaction):
-        ctx = await self.bot.get_context(interaction)
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.pause_(ctx)
 
     @app_commands.command(name="resume", description="Reanuda la música pausada.")
     async def resume_slash(self, interaction: discord.Interaction):
-        ctx = await self.bot.get_context(interaction)
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.resume_(ctx)
 
     @app_commands.command(name="skip", description="Salta la canción actual.")
     async def skip_slash(self, interaction: discord.Interaction):
-        ctx = await self.bot.get_context(interaction)
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.skip_(ctx)
 
     @app_commands.command(name="queue", description="Muestra la cola de reproducción.")
     async def queue_slash(self, interaction: discord.Interaction):
-        ctx = await self.bot.get_context(interaction)
+        mock_message = discord.Object(id=interaction.id)
+        mock_message.author = interaction.user
+        mock_message.channel = interaction.channel
+        mock_message.guild = interaction.guild
+        ctx = await self.bot.get_context(mock_message)
+        ctx.voice_client = interaction.guild.voice_client
         await self.queue_(ctx)
 
 async def setup(bot: commands.Bot):
