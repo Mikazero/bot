@@ -19,8 +19,8 @@ RUN pip install -r requirements.txt
 # Crear directorio para Lavalink
 WORKDIR /opt/Lavalink
 
-# Descargar Lavalink
-RUN curl -L https://github.com/lavalink-devs/Lavalink/releases/download/4.0.0/Lavalink.jar -o Lavalink.jar
+# Descargar Lavalink v4.0.8
+RUN curl -L https://github.com/lavalink-devs/Lavalink/releases/download/4.0.8/Lavalink.jar -o Lavalink.jar
 
 # Crear el archivo de configuración
 COPY application.yml .
