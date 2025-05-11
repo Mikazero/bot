@@ -7,7 +7,7 @@ LAVALINK_PID=$!
 
 # Esperar a que Lavalink inicie
 echo "Esperando a que Lavalink inicie..."
-sleep 20
+sleep 30
 
 # Verificar que Lavalink está corriendo
 if ! ps -p $LAVALINK_PID > /dev/null; then
