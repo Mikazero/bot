@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Iniciar Lavalink en segundo plano, forzando IPv4 para Java
+# Iniciar Lavalink en segundo plano, forzando IPv4 para Java y limitando memoria
 cd /opt/Lavalink
-java -Djava.net.preferIPv4Stack=true -jar Lavalink.jar &
+java -Xms128m -Xmx256m -Djava.net.preferIPv4Stack=true -jar Lavalink.jar &
 LAVALINK_PID=$!
 
 # Esperar a que Lavalink inicie
