@@ -51,9 +51,23 @@ class Music(commands.Cog):
         if queue:
             next_track = queue.pop(0)
             await player.play(next_track)
+            
+            # Enviar embed informando la nueva canción
+            if hasattr(player, 'text_channel') and player.text_channel:
+                embed_color = discord.Color.blue() # O usa config.EMBED_COLOR si está disponible
+                embed = discord.Embed(
+                    title="▶️ Reproduciendo ahora",
+                    description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
+                    color=embed_color
+                )
+                try:
+                    await player.text_channel.send(embed=embed)
+                except discord.HTTPException:
+                    # No se pudo enviar el mensaje (ej: permisos, canal borrado)
+                    pass 
         # else:
-            # Optionally, handle player disconnect or stay connected.
-            # await player.disconnect() # Desconectar si la cola está vacía
+            # Opcional: Desconectar si la cola está vacía o manejar de otra forma
+            # await player.disconnect() 
 
     @commands.command(name="play")
     async def play_(self, ctx: commands.Context, *, search: str):
@@ -70,8 +84,12 @@ class Music(commands.Cog):
                 return
         else:
             player = ctx.voice_client
+        
+        # Almacenar el canal de texto en el player para futuras notificaciones
+        player.text_channel = ctx.channel 
 
-        embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=discord.Color.blue())
+        embed_color = discord.Color.blue() # O usa config.EMBED_COLOR
+        embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=embed_color)
         msg = await ctx.send(embed=embed)
 
         try:
@@ -99,26 +117,30 @@ class Music(commands.Cog):
                     embed = discord.Embed(
                         title="🎵 Playlist añadida a la cola",
                         description=f"Se añadieron {num_tracks} canciones de **{playlist_name}** a la cola.",
-                        color=discord.Color.blue()
+                        color=embed_color
                     )
                     await msg.edit(embed=embed)
                 else: # Player is idle, play first and queue rest
                     first_track = tracks_from_playlist[0]
                     await player.play(first_track)
-                    
+                    # El embed de "Reproduciendo ahora" ya se enviará desde on_wavelink_track_start (si se implementa) o 
+                    # se podría enviar uno aquí específicamente para la primera canción de la playlist.
+                    # Por consistencia, dejaremos que el evento on_wavelink_track_end maneje el mensaje de la *siguiente* canción.
+                    # Para la *primera* canción, el mensaje de abajo es suficiente o se puede mejorar.
+
+                    desc = f"Empezando con: **{first_track.title}** ({self.format_time(first_track.length)})"
                     for track_in_playlist in tracks_from_playlist[1:]:
                         queue.append(track_in_playlist)
                     
-                    desc = f"Empezando con: **{first_track.title}** ({self.format_time(first_track.length)})"
                     if num_tracks > 1:
-                        desc += f"\\n{num_tracks - 1} más canciones de **{playlist_name}** añadidas a la cola."
-                    else:
-                        desc += f"\\nEs la única canción de la playlist **{playlist_name}**."
+                        desc += f"\n{num_tracks - 1} más canciones de **{playlist_name}** añadidas a la cola."
+                    # else: # No es necesario un else, ya que la primera canción ya está en desc
+                    #    desc += f"\nEs la única canción de la playlist **{playlist_name}**."
 
                     embed = discord.Embed(
                         title=f"▶️ Reproduciendo playlist: {playlist_name}",
                         description=desc,
-                        color=discord.Color.blue()
+                        color=embed_color
                     )
                     await msg.edit(embed=embed)
 
@@ -129,19 +151,20 @@ class Music(commands.Cog):
                     queue.append(track)
                     embed = discord.Embed(
                         title="🎵 Añadida a la cola",
-                        description=f"**{track.title}**\\nDuración: {self.format_time(track.length)}",
-                        color=discord.Color.blue()
+                        description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
+                        color=embed_color
                     )
                     await msg.edit(embed=embed)
                 else:
                     await player.play(track)
+                    # Mensaje de reproducción inicial
                     embed = discord.Embed(
                         title="▶️ Reproduciendo",
-                        description=f"**{track.title}**\\nDuración: {self.format_time(track.length)}",
-                        color=discord.Color.blue()
+                        description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
+                        color=embed_color
                     )
                     await msg.edit(embed=embed)
-            else: # Should ideally not be reached if search returns Playlist, list[Playable] or None
+            else: 
                 await msg.edit(embed=discord.Embed(title="❌ Formato de resultado inesperado.", color=discord.Color.red()))
                 return
 
@@ -255,6 +278,50 @@ class Music(commands.Cog):
                 )
         elif not current_track:
             embed.description = "La cola está vacía y nada se está reproduciendo."
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="info", aliases=['np', 'nowplaying'])
+    async def info_(self, ctx: commands.Context):
+        """Muestra información sobre la canción que se está reproduciendo actualmente."""
+        player: wavelink.Player | None = ctx.voice_client
+        embed_color = discord.Color.blue() # O config.EMBED_COLOR
+
+        if not player or not player.current:
+            embed = discord.Embed(
+                title="ℹ️ Información", 
+                description="No hay ninguna canción reproduciéndose actualmente.", 
+                color=embed_color
+            )
+            await ctx.send(embed=embed)
+            return
+
+        track: wavelink.Playable = player.current
+        position = self.format_time(player.position)
+        duration = self.format_time(track.length)
+        
+        description_lines = []
+        if track.author and track.author != "Unknown Artist":
+            description_lines.append(f"**Artista:** {track.author}")
+        
+        description_lines.append(f"**Duración:** {position} / {duration}")
+        
+        if track.uri:
+            description_lines.append(f"**Fuente:** [Click aquí]({track.uri})")
+        else:
+            description_lines.append("**Fuente:** No disponible")
+
+        embed = discord.Embed(
+            title=f"▶️ Reproduciendo ahora: {track.title}",
+            description="\n".join(description_lines),
+            color=embed_color
+        )
+
+        if hasattr(track, 'artwork') and track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+        elif hasattr(track, 'album') and hasattr(track.album, 'artwork') and track.album.artwork: # Para algunas fuentes como Spotify
+             embed.set_thumbnail(url=track.album.artwork)
+
 
         await ctx.send(embed=embed)
 
