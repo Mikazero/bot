@@ -1,1 +1,2 @@
 # bot
+Bot sencillo para interaccion, busqueda de imagenes, moderacion de servidor, reproduccion de musica en un chat de voz (Requiere configuracion de un servidor de cliente, sea propio o publico), lo creé como hobby y para ser utilizado en un server personal con amigos, pero puede usarlo quien se encuentre con este repositorio sin ningun tipo de limitacion con su uso o al modificar el codigo, planeo actualizarlo con mas comandos en un futuro, y hacer mas bonito este readme. XD
