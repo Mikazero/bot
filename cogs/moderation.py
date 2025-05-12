@@ -109,16 +109,20 @@ class Moderation(commands.Cog):
             pass
         else:
             first_arg = args_list[0]
-            potential_reason_args = args_list[1:] # Arguments after the first one
+            potential_reason_args = args_list[1:]
 
-            match_combined = re.fullmatch(r"(\d+)([mhd])", first_arg, re.IGNORECASE)
-            match_numeric = re.fullmatch(r"(\d+)", first_arg)
+            # Modificada la regex para incluir 's' para segundos
+            match_combined = re.fullmatch(r"(\\d+)([mhds])", first_arg, re.IGNORECASE)
+            match_numeric = re.fullmatch(r"(\\d+)", first_arg)
 
             parsed_time_successfully = False
             if match_combined:
                 value = int(match_combined.group(1))
                 unit = match_combined.group(2).lower()
-                if unit == 'm':
+                if unit == 's':
+                    duration_seconds = value
+                    human_readable_duration = f"{value} segundo" if value == 1 else f"{value} segundos"
+                elif unit == 'm':
                     duration_seconds = value * 60
                     human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
                 elif unit == 'h':
@@ -129,11 +133,15 @@ class Moderation(commands.Cog):
                     human_readable_duration = f"{value} día" if value == 1 else f"{value} días"
                 reason_parts_list = potential_reason_args
                 parsed_time_successfully = True
-            elif match_numeric and potential_reason_args and potential_reason_args[0].lower() in ['m', 'h', 'd']:
+            # Modificada la condición para incluir 's'
+            elif match_numeric and potential_reason_args and potential_reason_args[0].lower() in ['s', 'm', 'h', 'd']:
                 value = int(match_numeric.group(1))
                 unit = potential_reason_args[0].lower()
-                reason_parts_list = potential_reason_args[1:] # Arguments after the unit
-                if unit == 'm':
+                reason_parts_list = potential_reason_args[1:]
+                if unit == 's':
+                    duration_seconds = value
+                    human_readable_duration = f"{value} segundo" if value == 1 else f"{value} segundos"
+                elif unit == 'm':
                     duration_seconds = value * 60
                     human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
                 elif unit == 'h':
@@ -143,75 +151,79 @@ class Moderation(commands.Cog):
                     duration_seconds = value * 86400
                     human_readable_duration = f"{value} día" if value == 1 else f"{value} días"
                 parsed_time_successfully = True
-            elif match_numeric: # Only a number, interpret as minutes
+            elif match_numeric:
                 value = int(match_numeric.group(1))
-                duration_seconds = value * 60
+                duration_seconds = value * 60 # Por defecto minutos si solo es número
                 human_readable_duration = f"{value} minuto" if value == 1 else f"{value} minutos"
                 reason_parts_list = potential_reason_args
                 parsed_time_successfully = True
             
-            if not parsed_time_successfully: # If no time was parsed, all args are reason
+            if not parsed_time_successfully:
                 reason_parts_list = args_list
             
             if reason_parts_list:
                 reason = " ".join(reason_parts_list)
 
-        if muted_role in member.roles:
-            # User is already muted, we will update the mute duration/reason
-            # Cancel any existing unmute task for this user in this guild
-            old_task_marker = self.muted_users.pop((member.id, ctx.guild.id), None)
-            # If we were storing actual asyncio.Task objects, we would cancel it:
-            # if old_task_marker and isinstance(old_task_marker, asyncio.Task):
-            #     old_task_marker.cancel()
-            pass
-
-
-        try:
-            await member.add_roles(muted_role, reason=reason)
-        except discord.Forbidden:
-            await ctx.send(f"❌ No tengo permisos para añadir el rol 'Muted' a {member.mention}.")
-            return
-        except Exception as e:
-            await ctx.send(f"❌ Ocurrió un error al intentar mutear a {member.mention}: {e}")
-            return
+        if muted_role in member.roles and not duration_seconds > 0 : # Si ya está muteado y la nueva duración es indefinida o 0
+             old_task_marker = self.muted_users.pop((member.id, ctx.guild.id), None) # Cancelar task anterior si existía
+             # No es necesario volver a añadir el rol si ya lo tiene y el mute es indefinido.
+             # Se podría enviar un mensaje indicando que el mute se actualizó a indefinido.
+             # Por ahora, solo se cancela la tarea anterior y se deja el rol.
+        else: # Si no está muteado, o si se está actualizando un mute con nueva duración > 0
+            try:
+                await member.add_roles(muted_role, reason=reason)
+            except discord.Forbidden:
+                await ctx.send(f"❌ No tengo permisos para añadir el rol 'Muted' a {member.mention}.")
+                return
+            except Exception as e:
+                await ctx.send(f"❌ Ocurrió un error al intentar mutear a {member.mention}: {e}")
+                return
         
         embed_description = f"{member.mention} fue muteado."
         if reason:
+            # Usar \n para nueva línea
             embed_description += f"\\nMotivo: {reason}"
         
-        current_mute_marker = object() # Unique marker for this mute instance
-
+        # Construir y enviar el embed de confirmación ANTES del sleep.
+        current_mute_marker = object()
+        
         if duration_seconds > 0:
+            # Usar \n para nueva línea
             embed_description += f"\\nDuración: {human_readable_duration}"
             self.muted_users[(member.id, ctx.guild.id)] = current_mute_marker
-            
-            await asyncio.sleep(duration_seconds)
-            
-            # Check if this mute instance is still the active one before unmuting
-            if self.muted_users.get((member.id, ctx.guild.id)) == current_mute_marker:
-                if muted_role in member.roles: # Check if still has role (wasn't manually unmuted)
-                    try:
-                        await member.remove_roles(muted_role, reason="Tiempo de mute expirado")
-                    except discord.HTTPException: # Covers NotFound, Forbidden
-                        pass # Member might have left, or bot lost perms
-                # Clean up the entry whether role removal succeeded or not, as this task is done
-                self.muted_users.pop((member.id, ctx.guild.id), None)
-        else: # Duration is 0 or less, treat as effectively permanent (or until manual unmute)
-              # This path is taken if user specifies "0m", "0h", "0d".
+        else:
+            # Usar \n para nueva línea
             embed_description += "\\nDuración: Indefinida (hasta desmuteo manual, o tiempo 0 especificado)"
-            # No task is scheduled, user remains muted with the role.
-            # We can remove from self.muted_users if they were there from a previous timed mute
+            # Si era un mute temporal y ahora es indefinido, nos aseguramos de quitar el marcador
             self.muted_users.pop((member.id, ctx.guild.id), None)
-
 
         embed = discord.Embed(
             title="🔇 Usuario muteado",
-            description=embed_description,
+            description=embed_description, # La descripción ya tiene la duración
             color=config.EMBED_COLOR,
             timestamp=datetime.now()
         )
         embed.set_footer(text=f"Muteado por {ctx.author}")
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed) # Enviar confirmación ahora
+
+        # Ahora, la lógica para el desmuteo automático si la duración es positiva
+        if duration_seconds > 0:
+            await asyncio.sleep(duration_seconds)
+            
+            if self.muted_users.get((member.id, ctx.guild.id)) == current_mute_marker:
+                # Solo quitar rol si el miembro aún está en el servidor y tiene el rol.
+                # member object podría estar desactualizado, obtenerlo de nuevo es más seguro si es posible,
+                # o simplemente intentar la acción y capturar excepciones.
+                # Para simplificar, usamos el member original, pero podría fallar si dejó el server.
+                if muted_role in member.roles:
+                    try:
+                        await member.remove_roles(muted_role, reason="Tiempo de mute expirado")
+                        # Opcional: enviar DM o mensaje en canal de logs sobre desmuteo automático
+                    except discord.HTTPException: 
+                        pass # Miembro no encontrado, bot sin permisos, etc.
+                self.muted_users.pop((member.id, ctx.guild.id), None)
+        # No hay 'else' aquí porque si duration_seconds es 0 o menos, el mute es indefinido
+        # y ya se manejó arriba (se envió el embed y se limpió self.muted_users si era necesario).
 
     @commands.command(name="unmute")
     @commands.has_permissions(manage_roles=True)
