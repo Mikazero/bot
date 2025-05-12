@@ -202,11 +202,26 @@ class Moderation(commands.Cog):
         if duration_seconds > 0:
             await asyncio.sleep(duration_seconds)
             if self.muted_users.get((member.id, ctx.guild.id)) == current_mute_marker:
-                if muted_role in member.roles:
-                    try:
-                        await member.remove_roles(muted_role, reason="Tiempo de mute expirado")
-                    except discord.HTTPException: 
-                        pass 
+                # Intentar obtener el miembro actualizado por si acaso
+                guild = ctx.guild
+                try:
+                    member_actual = guild.get_member(member.id)
+                    if member_actual is None:
+                        # Si el miembro no está en caché, intentar buscarlo
+                        member_actual = await guild.fetch_member(member.id)
+                except Exception:
+                    member_actual = member
+                # Llamar al comando unmute para reutilizar la lógica y el embed
+                try:
+                    await self.unmute(ctx, member_actual)
+                except Exception:
+                    # Si falla, intentar quitar el rol manualmente como fallback
+                    muted_role = discord.utils.get(guild.roles, name="Muted")
+                    if muted_role and muted_role in member_actual.roles:
+                        try:
+                            await member_actual.remove_roles(muted_role, reason="Tiempo de mute expirado (fallback)")
+                        except Exception:
+                            pass
                 self.muted_users.pop((member.id, ctx.guild.id), None)
 
     @commands.command(name="unmute")
