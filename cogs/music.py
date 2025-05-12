@@ -47,27 +47,26 @@ class Music(commands.Cog):
         if not player:
             return
 
-        queue = self.get_queue(player.guild.id)
-        if queue:
-            next_track = queue.pop(0)
-            await player.play(next_track)
-            
-            # Enviar embed informando la nueva canción
-            if hasattr(player, 'text_channel') and player.text_channel:
-                embed_color = discord.Color.blue() # O usa config.EMBED_COLOR si está disponible
-                embed = discord.Embed(
-                    title="▶️ Reproduciendo ahora",
-                    description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
-                    color=embed_color
-                )
-                try:
-                    await player.text_channel.send(embed=embed)
-                except discord.HTTPException:
-                    # No se pudo enviar el mensaje (ej: permisos, canal borrado)
-                    pass 
-        # else:
-            # Opcional: Desconectar si la cola está vacía o manejar de otra forma
-            # await player.disconnect() 
+        # Solo reproducir la siguiente canción si la canción actual terminó naturalmente
+        if payload.reason == "FINISHED":
+            queue = self.get_queue(player.guild.id)
+            if queue:
+                next_track = queue.pop(0)
+                await player.play(next_track)
+                
+                # Enviar embed informando la nueva canción
+                if hasattr(player, 'text_channel') and player.text_channel:
+                    embed_color = discord.Color.blue() # O usa config.EMBED_COLOR si está disponible
+                    embed = discord.Embed(
+                        title="▶️ Reproduciendo ahora",
+                        description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
+                        color=embed_color
+                    )
+                    try:
+                        await player.text_channel.send(embed=embed)
+                    except discord.HTTPException:
+                        # No se pudo enviar el mensaje (ej: permisos, canal borrado)
+                        pass
 
     @commands.command(name="play")
     async def play_(self, ctx: commands.Context, *, search: str):
