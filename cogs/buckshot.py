@@ -194,7 +194,35 @@ class Buckshot(commands.Cog):
         embed.add_field(name="Vidas", value=lives_text, inline=False)
         
         await ctx.send(embed=embed)
+        
+        # Mostrar información sobre los cartuchos
+        await self.show_shotgun_info(ctx, game)
+        
         await self.show_turn_options(ctx, game)
+
+    async def show_shotgun_info(self, ctx: commands.Context, game: BuckshotGame):
+        """Muestra información sobre la carga de la escopeta"""
+        total_shells = len(game.shotgun)
+        live_shells = game.shotgun.count('LIVE')
+        empty_shells = game.shotgun.count('EMPTY')
+        
+        # Representación visual de los cartuchos
+        live_visual = "🟥 " * live_shells  # Cuadrado rojo para cartuchos vivos
+        empty_visual = "🟦 " * empty_shells  # Cuadrado azul para cartuchos vacíos
+        
+        embed = discord.Embed(
+            title="🔫 Cartuchos cargados",
+            description=f"La escopeta ha sido cargada con {total_shells} cartuchos ordenados aleatoriamente.",
+            color=discord.Color.orange()
+        )
+        embed.add_field(
+            name="Cartuchos",
+            value=f"Vivos: {live_shells} {live_visual}\nVacíos: {empty_shells} {empty_visual}",
+            inline=False
+        )
+        embed.set_footer(text="Los cartuchos están ordenados de forma aleatoria. ¡Buena suerte!")
+        
+        await ctx.send(embed=embed)
 
     async def show_turn_options(self, ctx: commands.Context, game: BuckshotGame):
         """Muestra las opciones disponibles para el turno actual"""
@@ -558,6 +586,10 @@ class Buckshot(commands.Cog):
         embed.add_field(name="Vidas del Dealer", value="❤️" * game.dealer_lives, inline=True)
         
         await ctx.send(embed=embed)
+        
+        # Mostrar información sobre los cartuchos
+        await self.show_shotgun_info(ctx, game)
+        
         game.current_player_index = (game.current_player_index + 1) % len(game.players)
         await self.show_turn_options(ctx, game)
 
@@ -650,6 +682,38 @@ class Buckshot(commands.Cog):
             await self.end_round(ctx, game)
         else:
             await self.show_turn_options(ctx, game)
+
+    @commands.command(name="solo")
+    async def solo_game(self, ctx: commands.Context):
+        """Inicia una partida de Buckshot Roulette directamente contra el bot"""
+        if ctx.guild.id in self.active_games:
+            await ctx.send("❌ Ya hay una partida en curso en este servidor.")
+            return
+
+        game = BuckshotGame(ctx.author)
+        game.initialize_player(ctx.author)
+        self.active_games[ctx.guild.id] = game
+        game.game_started = True
+        game.load_shotgun()
+
+        embed = discord.Embed(
+            title="🎮 Buckshot Roulette - Modo Solitario",
+            description="¡Iniciando partida contra el Dealer!",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Ronda", value=f"{game.round}/3", inline=True)
+        
+        # Mostrar vidas
+        lives_text = f"{ctx.author.mention}: {'❤️' * game.player_lives[ctx.author.id]}\n"
+        lives_text += f"🤖 Dealer: {'❤️' * game.dealer_lives}\n"
+        embed.add_field(name="Vidas", value=lives_text, inline=False)
+        
+        await ctx.send(embed=embed)
+        
+        # Mostrar información sobre los cartuchos
+        await self.show_shotgun_info(ctx, game)
+        
+        await self.show_turn_options(ctx, game)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Buckshot(bot)) 

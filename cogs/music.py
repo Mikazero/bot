@@ -53,15 +53,17 @@ class Music(commands.Cog):
             return
 
         # Solo reproducir la siguiente canción si la canción actual terminó naturalmente
-        if payload.reason == "FINISHED":
+        if payload.reason.lower() == "finished":
             print("Canción terminada naturalmente")
             await self.play_next(player)
-        elif payload.reason == "REPLACED":
+        elif payload.reason.lower() == "replaced":
             print("Canción reemplazada (skip)")
             # No hacemos nada, el skip ya se encarga de reproducir la siguiente
             pass
         else:
             print(f"Canción terminada por otra razón: {payload.reason}")
+            # Para otros casos (como STOPPED, ENDED, etc.) intentar reproducir la siguiente
+            await self.play_next(player)
 
     async def play_next(self, player: wavelink.Player):
         """Reproduce la siguiente canción en la cola"""
