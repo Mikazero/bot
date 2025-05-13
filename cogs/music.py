@@ -5,7 +5,7 @@ import wavelink
 import os
 from typing import Optional
 import asyncio
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -14,6 +14,10 @@ class Music(commands.Cog):
         self.queues = {}
         # Registrar manualmente el evento de wavelink
         bot.add_listener(self.on_wavelink_track_end, "on_wavelink_track_end")
+        # Diccionario para controlar temporizadores de desconexión
+        self.disconnect_timers = {}
+        # Iniciar la tarea de verificación periódica
+        self.check_voice_state_task = self.bot.loop.create_task(self.check_voice_state_loop())
 
     async def connect_nodes(self):
         """Conecta a los nodos de Lavalink"""
@@ -487,6 +491,109 @@ class Music(commands.Cog):
         ctx = await self.bot.get_context(mock_message)
         ctx.voice_client = interaction.guild.voice_client
         await self.queue_(ctx)
+
+    async def check_voice_state_loop(self):
+        """Tarea de verificación periódica del estado de los canales de voz"""
+        await self.bot.wait_until_ready()
+        try:
+            while not self.bot.is_closed():
+                for guild in self.bot.guilds:
+                    # Comprobar si el bot está en un canal de voz
+                    if not guild.voice_client or not isinstance(guild.voice_client, wavelink.Player):
+                        continue
+                    
+                    player = guild.voice_client
+                    channel = player.channel
+                    
+                    # Si no hay canal (extraño pero posible), continuar
+                    if not channel:
+                        continue
+                    
+                    # Contar miembros humanos en el canal de voz
+                    human_members = [m for m in channel.members if not m.bot]
+                    
+                    # Si está reproduciendo activamente música, resetear cualquier temporizador
+                    if player.current:
+                        if guild.id in self.disconnect_timers:
+                            # Cancelar temporizador si existe
+                            self.disconnect_timers[guild.id].cancel()
+                            self.disconnect_timers.pop(guild.id, None)
+                        continue
+                    
+                    # Caso 1: Bot solo en el canal - esperar 5 minutos
+                    if len(human_members) == 0:
+                        if guild.id not in self.disconnect_timers:
+                            print(f"Bot solo en el canal de voz en {guild.name}. Programando desconexión en 5 minutos.")
+                            self.disconnect_timers[guild.id] = self.bot.loop.create_task(
+                                self.disconnect_after(player, 5 * 60, guild.id)
+                            )
+                    
+                    # Caso 2: Bot con otros usuarios pero sin reproducir - esperar 15 minutos
+                    elif not player.current:
+                        if guild.id not in self.disconnect_timers:
+                            print(f"Bot inactivo con usuarios en el canal en {guild.name}. Programando desconexión en 15 minutos.")
+                            self.disconnect_timers[guild.id] = self.bot.loop.create_task(
+                                self.disconnect_after(player, 15 * 60, guild.id)
+                            )
+                
+                # Esperar 30 segundos antes de la próxima verificación
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"Error en la tarea de verificación de canales de voz: {e}")
+
+    async def disconnect_after(self, player: wavelink.Player, seconds: int, guild_id: int):
+        """Desconecta al bot después de un tiempo determinado si no se reanuda la reproducción"""
+        try:
+            # Esperar el tiempo especificado
+            await asyncio.sleep(seconds)
+            
+            # Verificar si el bot sigue conectado y si sigue sin reproducir
+            if (player.guild and player.guild.voice_client == player and 
+                not player.current):
+                
+                # Enviar mensaje si hay un canal de texto asociado
+                if hasattr(player, 'text_channel') and player.text_channel:
+                    try:
+                        minutes = seconds // 60
+                        embed = discord.Embed(
+                            title="🎵 Desconexión automática",
+                            description=f"Me he desconectado después de {minutes} minutos de inactividad.",
+                            color=discord.Color.blue(),
+                            timestamp=datetime.now()
+                        )
+                        await player.text_channel.send(embed=embed)
+                    except Exception as e:
+                        print(f"Error al enviar mensaje de desconexión: {e}")
+                
+                # Limpiar cola
+                if guild_id in self.queues:
+                    self.queues[guild_id] = []
+                
+                # Desconectar
+                await player.disconnect()
+                print(f"Bot desconectado por inactividad en servidor {guild_id}")
+            
+        except asyncio.CancelledError:
+            # Tarea cancelada - probablemente porque se reanudó la música
+            pass
+        except Exception as e:
+            print(f"Error en temporizador de desconexión: {e}")
+        finally:
+            # Limpiar referencia del temporizador
+            self.disconnect_timers.pop(guild_id, None)
+
+    def cog_unload(self):
+        """Limpieza al descargar el cog"""
+        # Cancelar tareas programadas
+        if hasattr(self, 'check_voice_state_task') and self.check_voice_state_task:
+            self.check_voice_state_task.cancel()
+        
+        # Cancelar todos los temporizadores de desconexión
+        for timer in self.disconnect_timers.values():
+            timer.cancel()
+        self.disconnect_timers.clear()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Music(bot))
