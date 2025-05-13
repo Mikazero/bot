@@ -29,6 +29,7 @@ async def setup_hook():
     await bot.load_extension('cogs.search')
     await bot.load_extension('cogs.music')
     await bot.load_extension('cogs.moderation')
+    await bot.load_extension('cogs.buckshot')
     # Recuerda: el nombre es el "path" relativo: carpeta + nombre archivo (sin .py)
 
     # Sincroniza los comandos de la aplicación (slash commands)

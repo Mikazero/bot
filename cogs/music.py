@@ -51,22 +51,36 @@ class Music(commands.Cog):
         if payload.reason == "FINISHED":
             queue = self.get_queue(player.guild.id)
             if queue:
-                next_track = queue.pop(0)
-                await player.play(next_track)
-                
-                # Enviar embed informando la nueva canción
-                if hasattr(player, 'text_channel') and player.text_channel:
-                    embed_color = discord.Color.blue() # O usa config.EMBED_COLOR si está disponible
-                    embed = discord.Embed(
-                        title="▶️ Reproduciendo ahora",
-                        description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
-                        color=embed_color
-                    )
-                    try:
-                        await player.text_channel.send(embed=embed)
-                    except discord.HTTPException:
-                        # No se pudo enviar el mensaje (ej: permisos, canal borrado)
-                        pass
+                try:
+                    next_track = queue.pop(0)
+                    await player.play(next_track)
+                    
+                    # Enviar embed informando la nueva canción
+                    if hasattr(player, 'text_channel') and player.text_channel:
+                        embed = discord.Embed(
+                            title="▶️ Reproduciendo ahora",
+                            description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
+                            color=discord.Color.blue()
+                        )
+                        try:
+                            await player.text_channel.send(embed=embed)
+                        except discord.HTTPException:
+                            pass
+                except Exception as e:
+                    print(f"Error al reproducir la siguiente canción: {e}")
+                    # Si hay un error, intentar reproducir la siguiente canción en la cola
+                    if queue:
+                        try:
+                            next_track = queue.pop(0)
+                            await player.play(next_track)
+                        except Exception as e:
+                            print(f"Error al reproducir la siguiente canción después del fallo: {e}")
+            else:
+                # Si no hay más canciones en la cola, detener el player
+                try:
+                    await player.stop()
+                except Exception as e:
+                    print(f"Error al detener el player: {e}")
 
     @commands.command(name="play")
     async def play_(self, ctx: commands.Context, *, search: str):
