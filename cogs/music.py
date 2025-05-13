@@ -52,18 +52,45 @@ class Music(commands.Cog):
             print("No se encontró el player")
             return
 
+        # Verificar que el guild existe para evitar acceder a objetos inválidos
+        if not hasattr(player, 'guild') or not player.guild:
+            print("El player no tiene guild asociado")
+            return
+
         # Solo reproducir la siguiente canción si la canción actual terminó naturalmente
-        if payload.reason.lower() == "finished":
+        # Usar comparaciones en minúsculas para evitar problemas de mayúsculas
+        reason_lower = payload.reason.lower() if payload.reason else ""
+        
+        if reason_lower == "finished":
             print("Canción terminada naturalmente")
             await self.play_next(player)
-        elif payload.reason.lower() == "replaced":
+        elif reason_lower == "replaced":
             print("Canción reemplazada (skip)")
             # No hacemos nada, el skip ya se encarga de reproducir la siguiente
             pass
+        elif reason_lower in ["stopped", "ended", "cleanup", "loading_failed"]:
+            print(f"Canción terminada por: {payload.reason}")
+            # Para casos como STOPPED, ENDED, etc. verificar si debemos reproducir la siguiente
+            if self.get_queue(player.guild.id):
+                await self.play_next(player)
         else:
-            print(f"Canción terminada por otra razón: {payload.reason}")
-            # Para otros casos (como STOPPED, ENDED, etc.) intentar reproducir la siguiente
-            await self.play_next(player)
+            print(f"Canción terminada por otra razón desconocida: {payload.reason}")
+            # Para otros casos desconocidos, intentar reproducir la siguiente
+            try:
+                await self.play_next(player)
+            except Exception as e:
+                print(f"Error al intentar reproducir siguiente canción: {e}")
+                # Si falla, intentar una reconexión si el canal aún existe
+                try:
+                    if hasattr(player, 'text_channel') and player.text_channel:
+                        await player.text_channel.send("⚠️ Hubo un problema con el reproductor. Intentando recuperar...")
+                        queue = self.get_queue(player.guild.id)
+                        if queue and player.guild.voice_client:
+                            await player.guild.voice_client.disconnect()
+                            # No reproducimos aquí, solo notificamos para que el usuario inicie manualmente
+                            await player.text_channel.send("🔄 Por favor, usa el comando play nuevamente.")
+                except Exception as recovery_error:
+                    print(f"Error durante la recuperación: {recovery_error}")
 
     async def play_next(self, player: wavelink.Player):
         """Reproduce la siguiente canción en la cola"""
@@ -90,9 +117,10 @@ class Music(commands.Cog):
             next_track = queue.pop(0)
             print(f"Reproduciendo siguiente canción: {next_track.title}")
             
-            # Asegurarse de que el player esté conectado
-            if not player.is_connected():
-                print("El player no está conectado")
+            # Verificar si el reproductor sigue conectado
+            # Usar player.guild.voice_client en lugar de is_connected()
+            if not player.guild.voice_client or player.guild.voice_client != player:
+                print("El player ya no está conectado")
                 if hasattr(player, 'text_channel') and player.text_channel:
                     await player.text_channel.send("❌ El bot se desconectó. Por favor, vuelve a usar el comando play.")
                 return

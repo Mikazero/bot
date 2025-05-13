@@ -267,11 +267,20 @@ class Buckshot(commands.Cog):
         # Añadir reacciones para las opciones
         await message.add_reaction("1️⃣")
         await message.add_reaction("2️⃣")
+        
+        # Lista de emojis numéricos predefinidos para evitar problemas de formato
+        number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        
         for i in range(len(game.player_items[current_player.id])):
-            await message.add_reaction(f"{i+3}️⃣")
+            if i+2 < len(number_emojis):  # Usar +2 porque ya usamos 1️⃣ y 2️⃣
+                await message.add_reaction(number_emojis[i+2])
 
         def check(reaction, user):
-            return user == current_player and str(reaction.emoji) in ["1️⃣", "2️⃣"] + [f"{i+3}️⃣" for i in range(len(game.player_items[current_player.id]))]
+            valid_emojis = ["1️⃣", "2️⃣"]
+            for i in range(len(game.player_items[current_player.id])):
+                if i+2 < len(number_emojis):
+                    valid_emojis.append(number_emojis[i+2])
+            return user == current_player and str(reaction.emoji) in valid_emojis
 
         try:
             reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
@@ -284,7 +293,8 @@ class Buckshot(commands.Cog):
                 else:
                     await self.shoot_dealer(ctx, game)
             else:
-                item_index = ["1️⃣", "2️⃣"].index(str(reaction.emoji)) - 2
+                # Encontrar índice del emoji en la lista de emojis válidos
+                item_index = number_emojis.index(str(reaction.emoji)) - 2
                 await self.use_item(ctx, game, game.player_items[current_player.id][item_index])
 
         except asyncio.TimeoutError:
@@ -301,6 +311,9 @@ class Buckshot(commands.Cog):
         if ctx.author != current_player:
             return
 
+        # Lista de emojis numéricos predefinidos
+        number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
         embed = discord.Embed(
             title="Selecciona un objetivo",
             description="¿A quién quieres disparar?",
@@ -309,21 +322,28 @@ class Buckshot(commands.Cog):
 
         # Lista de jugadores disponibles (excluyendo al jugador actual)
         available_players = [p for p in game.players if p != current_player]
-        players_text = "\n".join([f"{i+1}️⃣ {player.mention}" for i, player in enumerate(available_players)])
+        
+        # Limitar a la cantidad de emojis disponibles
+        available_players = available_players[:len(number_emojis)]
+        
+        players_text = "\n".join([f"{number_emojis[i]} {player.mention}" for i, player in enumerate(available_players)])
         embed.add_field(name="Jugadores", value=players_text, inline=False)
 
         message = await ctx.send(embed=embed)
         
         # Añadir reacciones para cada jugador
         for i in range(len(available_players)):
-            await message.add_reaction(f"{i+1}️⃣")
+            if i < len(number_emojis):
+                await message.add_reaction(number_emojis[i])
 
         def check(reaction, user):
-            return user == current_player and str(reaction.emoji) in [f"{i+1}️⃣" for i in range(len(available_players))]
+            valid_emojis = [number_emojis[i] for i in range(len(available_players)) if i < len(number_emojis)]
+            return user == current_player and str(reaction.emoji) in valid_emojis
 
         try:
             reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
-            target_index = int(str(reaction.emoji)[0]) - 1
+            # Obtener el índice del emoji seleccionado
+            target_index = number_emojis.index(str(reaction.emoji))
             target = available_players[target_index]
             await self.shoot_player(ctx, game, target)
 
