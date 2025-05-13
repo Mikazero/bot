@@ -12,6 +12,8 @@ class Music(commands.Cog):
         self.bot = bot
         self.bot.loop.create_task(self.connect_nodes())
         self.queues = {}
+        # Registrar manualmente el evento de wavelink
+        bot.add_listener(self.on_wavelink_track_end, "on_wavelink_track_end")
 
     async def connect_nodes(self):
         """Conecta a los nodos de Lavalink"""
@@ -27,6 +29,7 @@ class Music(commands.Cog):
             )
         ]
         await wavelink.Pool.connect(nodes=nodes, client=self.bot, cache_capacity=100)
+        print("Conectado a los nodos de Lavalink")
 
     def get_queue(self, guild_id: int) -> list[wavelink.Playable]:
         """Obtiene la cola de reproducción del servidor"""
@@ -40,61 +43,78 @@ class Music(commands.Cog):
             return "N/A"
         return str(timedelta(milliseconds=milliseconds)).split('.')[0]
 
-    @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
         """Evento que se dispara cuando termina una canción"""
-        player: wavelink.Player | None = payload.player
+        print(f"Evento on_wavelink_track_end disparado: {payload.reason}")
+        
+        player = payload.player
         if not player:
+            print("No se encontró el player")
             return
 
         # Solo reproducir la siguiente canción si la canción actual terminó naturalmente
         if payload.reason == "FINISHED":
-            queue = self.get_queue(player.guild.id)
+            print("Canción terminada naturalmente")
+            await self.play_next(player)
+        elif payload.reason == "REPLACED":
+            print("Canción reemplazada (skip)")
+            # No hacemos nada, el skip ya se encarga de reproducir la siguiente
+            pass
+        else:
+            print(f"Canción terminada por otra razón: {payload.reason}")
+
+    async def play_next(self, player: wavelink.Player):
+        """Reproduce la siguiente canción en la cola"""
+        guild_id = player.guild.id
+        queue = self.get_queue(guild_id)
+        
+        if not queue:
+            print("No hay más canciones en la cola")
+            # No hay más canciones en la cola
+            try:
+                if hasattr(player, 'text_channel') and player.text_channel:
+                    embed = discord.Embed(
+                        title="⏹️ Cola finalizada",
+                        description="No hay más canciones en la cola.",
+                        color=discord.Color.blue()
+                    )
+                    await player.text_channel.send(embed=embed)
+            except Exception as e:
+                print(f"Error al enviar mensaje de cola finalizada: {e}")
+            return
+        
+        try:
+            # Tomar la siguiente canción de la cola
+            next_track = queue.pop(0)
+            print(f"Reproduciendo siguiente canción: {next_track.title}")
+            
+            # Asegurarse de que el player esté conectado
+            if not player.is_connected():
+                print("El player no está conectado")
+                if hasattr(player, 'text_channel') and player.text_channel:
+                    await player.text_channel.send("❌ El bot se desconectó. Por favor, vuelve a usar el comando play.")
+                return
+            
+            # Intentar reproducir la siguiente canción
+            await player.play(next_track)
+            
+            # Enviar embed informando la nueva canción
+            if hasattr(player, 'text_channel') and player.text_channel:
+                embed = discord.Embed(
+                    title="▶️ Reproduciendo ahora",
+                    description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
+                    color=discord.Color.blue()
+                )
+                try:
+                    await player.text_channel.send(embed=embed)
+                except discord.HTTPException as e:
+                    print(f"Error al enviar mensaje de reproducción: {e}")
+        except Exception as e:
+            print(f"Error al reproducir la siguiente canción: {e}")
+            # Intentar con la siguiente canción si hay error
             if queue:
-                try:
-                    next_track = queue.pop(0)
-                    # Asegurarse de que el player esté conectado
-                    if not player.is_connected():
-                        if hasattr(player, 'text_channel') and player.text_channel:
-                            await player.text_channel.send("❌ El bot se desconectó. Por favor, vuelve a usar el comando play.")
-                        return
-                    
-                    # Intentar reproducir la siguiente canción
-                    await player.play(next_track)
-                    
-                    # Enviar embed informando la nueva canción
-                    if hasattr(player, 'text_channel') and player.text_channel:
-                        embed = discord.Embed(
-                            title="▶️ Reproduciendo ahora",
-                            description=f"**{next_track.title}**\nDuración: {self.format_time(next_track.length)}",
-                            color=discord.Color.blue()
-                        )
-                        try:
-                            await player.text_channel.send(embed=embed)
-                        except discord.HTTPException:
-                            pass
-                except Exception as e:
-                    print(f"Error al reproducir la siguiente canción: {e}")
-                    # Si hay un error, intentar reproducir la siguiente canción en la cola
-                    if queue:
-                        try:
-                            next_track = queue.pop(0)
-                            await player.play(next_track)
-                        except Exception as e:
-                            print(f"Error al reproducir la siguiente canción después del fallo: {e}")
-            else:
-                # Si no hay más canciones en la cola, detener el player
-                try:
-                    await player.stop()
-                    if hasattr(player, 'text_channel') and player.text_channel:
-                        embed = discord.Embed(
-                            title="⏹️ Cola finalizada",
-                            description="No hay más canciones en la cola.",
-                            color=discord.Color.blue()
-                        )
-                        await player.text_channel.send(embed=embed)
-                except Exception as e:
-                    print(f"Error al detener el player: {e}")
+                print("Intentando con la siguiente canción debido a un error")
+                await self.play_next(player)
 
     @commands.command(name="play")
     async def play_(self, ctx: commands.Context, *, search: str):
@@ -245,12 +265,15 @@ class Music(commands.Cog):
         queue = self.get_queue(ctx.guild.id)
         if queue:
             next_track = queue.pop(0)
+            print(f"Saltando a la siguiente canción: {next_track.title}")
             await player.play(next_track)
             embed = discord.Embed(title="⏭️ Canción saltada, reproduciendo la siguiente.", description=f"Ahora reproduciendo: **{next_track.title}**", color=discord.Color.blue())
+            await ctx.send(embed=embed)
         else:
+            print("No hay más canciones para saltar")
             await player.stop()
             embed = discord.Embed(title="⏭️ Canción saltada. No hay más canciones en la cola.", color=discord.Color.blue())
-        await ctx.send(embed=embed)
+            await ctx.send(embed=embed)
 
     @commands.command(name="queue")
     async def queue_(self, ctx: commands.Context):
