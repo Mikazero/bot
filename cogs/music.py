@@ -53,6 +53,13 @@ class Music(commands.Cog):
             if queue:
                 try:
                     next_track = queue.pop(0)
+                    # Asegurarse de que el player esté conectado
+                    if not player.is_connected():
+                        if hasattr(player, 'text_channel') and player.text_channel:
+                            await player.text_channel.send("❌ El bot se desconectó. Por favor, vuelve a usar el comando play.")
+                        return
+                    
+                    # Intentar reproducir la siguiente canción
                     await player.play(next_track)
                     
                     # Enviar embed informando la nueva canción
@@ -79,6 +86,13 @@ class Music(commands.Cog):
                 # Si no hay más canciones en la cola, detener el player
                 try:
                     await player.stop()
+                    if hasattr(player, 'text_channel') and player.text_channel:
+                        embed = discord.Embed(
+                            title="⏹️ Cola finalizada",
+                            description="No hay más canciones en la cola.",
+                            color=discord.Color.blue()
+                        )
+                        await player.text_channel.send(embed=embed)
                 except Exception as e:
                     print(f"Error al detener el player: {e}")
 
@@ -101,7 +115,7 @@ class Music(commands.Cog):
         # Almacenar el canal de texto en el player para futuras notificaciones
         player.text_channel = ctx.channel 
 
-        embed_color = discord.Color.blue() # O usa config.EMBED_COLOR
+        embed_color = discord.Color.blue()
         embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=embed_color)
         msg = await ctx.send(embed=embed)
 
@@ -136,19 +150,13 @@ class Music(commands.Cog):
                 else: # Player is idle, play first and queue rest
                     first_track = tracks_from_playlist[0]
                     await player.play(first_track)
-                    # El embed de "Reproduciendo ahora" ya se enviará desde on_wavelink_track_start (si se implementa) o 
-                    # se podría enviar uno aquí específicamente para la primera canción de la playlist.
-                    # Por consistencia, dejaremos que el evento on_wavelink_track_end maneje el mensaje de la *siguiente* canción.
-                    # Para la *primera* canción, el mensaje de abajo es suficiente o se puede mejorar.
-
+                    
                     desc = f"Empezando con: **{first_track.title}** ({self.format_time(first_track.length)})"
                     for track_in_playlist in tracks_from_playlist[1:]:
                         queue.append(track_in_playlist)
                     
                     if num_tracks > 1:
                         desc += f"\n{num_tracks - 1} más canciones de **{playlist_name}** añadidas a la cola."
-                    # else: # No es necesario un else, ya que la primera canción ya está en desc
-                    #    desc += f"\nEs la única canción de la playlist **{playlist_name}**."
 
                     embed = discord.Embed(
                         title=f"▶️ Reproduciendo playlist: {playlist_name}",
@@ -170,7 +178,6 @@ class Music(commands.Cog):
                     await msg.edit(embed=embed)
                 else:
                     await player.play(track)
-                    # Mensaje de reproducción inicial
                     embed = discord.Embed(
                         title="▶️ Reproduciendo",
                         description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
