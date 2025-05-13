@@ -248,12 +248,19 @@ class Music(commands.Cog):
             await ctx.send("❌ No estoy reproduciendo música.")
             return
 
+        # Guardar referencia al canal para enviar el mensaje después de desconectar
+        text_channel = ctx.channel
+        guild_id = ctx.guild.id
+        
+        # Limpiar la cola antes de desconectar
+        if guild_id in self.queues:
+            self.queues[guild_id] = []
+            
+        # Desconectar el reproductor    
         await player.disconnect()
-        if ctx.guild.id in self.queues:
-            self.queues[ctx.guild.id] = []
         
         embed = discord.Embed(title="⏹️ Música detenida", color=discord.Color.blue())
-        await ctx.send(embed=embed)
+        await text_channel.send(embed=embed)
 
     @commands.command(name="pause")
     async def pause_(self, ctx: commands.Context):
@@ -293,17 +300,40 @@ class Music(commands.Cog):
             return
 
         queue = self.get_queue(ctx.guild.id)
+        
+        # Guardar canal para enviar mensaje después de stop
+        text_channel = ctx.channel
+        
         if queue:
-            next_track = queue.pop(0)
-            print(f"Saltando a la siguiente canción: {next_track.title}")
-            await player.play(next_track)
-            embed = discord.Embed(title="⏭️ Canción saltada, reproduciendo la siguiente.", description=f"Ahora reproduciendo: **{next_track.title}**", color=discord.Color.blue())
-            await ctx.send(embed=embed)
+            try:
+                next_track = queue.pop(0)
+                print(f"Saltando a la siguiente canción: {next_track.title}")
+                
+                # Comprobar que el player sigue conectado antes de reproducir
+                if not ctx.voice_client or ctx.voice_client != player:
+                    await ctx.send("❌ Se perdió la conexión con el canal de voz.")
+                    return
+                    
+                await player.play(next_track)
+                embed = discord.Embed(title="⏭️ Canción saltada, reproduciendo la siguiente.", description=f"Ahora reproduciendo: **{next_track.title}**", color=discord.Color.blue())
+                await text_channel.send(embed=embed)
+            except Exception as e:
+                print(f"Error al saltar a la siguiente canción: {e}")
+                await ctx.send("❌ Ocurrió un error al intentar reproducir la siguiente canción.")
+                # Intentar detener la reproducción actual si hubo error
+                try:
+                    await player.stop()
+                except:
+                    pass
         else:
             print("No hay más canciones para saltar")
-            await player.stop()
-            embed = discord.Embed(title="⏭️ Canción saltada. No hay más canciones en la cola.", color=discord.Color.blue())
-            await ctx.send(embed=embed)
+            try:
+                await player.stop()
+                embed = discord.Embed(title="⏭️ Canción saltada. No hay más canciones en la cola.", color=discord.Color.blue())
+                await text_channel.send(embed=embed)
+            except Exception as e:
+                print(f"Error al detener la reproducción: {e}")
+                await ctx.send("❌ Ocurrió un error al intentar detener la reproducción.")
 
     @commands.command(name="queue")
     async def queue_(self, ctx: commands.Context):

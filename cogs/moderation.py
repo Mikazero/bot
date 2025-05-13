@@ -367,25 +367,88 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("❌ No puedes mutear a alguien con un rol igual o superior al tuyo.", ephemeral=True)
             return
 
+        if user == interaction.guild.me:
+            await interaction.response.send_message("❌ No me puedo mutear a mí mismo.", ephemeral=True)
+            return
+
         muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
         if not muted_role:
-            muted_role = await interaction.guild.create_role(name="Muted")
-            for channel in interaction.guild.channels:
-                await channel.set_permissions(muted_role, speak=False, send_messages=False)
+            try:
+                muted_role = await interaction.guild.create_role(name="Muted", reason="Rol para usuarios muteados")
+                # Configurar permisos en todos los canales
+                for channel in interaction.guild.text_channels:
+                    await channel.set_permissions(muted_role, send_messages=False, reason="Configuración del rol Muted")
+                for channel in interaction.guild.voice_channels:
+                    await channel.set_permissions(muted_role, speak=False, reason="Configuración del rol Muted")
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ No tengo permisos para crear o configurar el rol 'Muted'.", ephemeral=True)
+                return
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Ocurrió un error al crear/configurar el rol 'Muted': {e}", ephemeral=True)
+                return
 
-        await user.add_roles(muted_role)
+        try:
+            await user.add_roles(muted_role, reason=reason)
+        except discord.Forbidden:
+            await interaction.response.send_message(f"❌ No tengo permisos para añadir el rol 'Muted' a {user.mention}.", ephemeral=True)
+            return
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ocurrió un error al intentar mutear a {user.mention}: {e}", ephemeral=True)
+            return
+
+        embed_description = f"{user.mention} fue muteado."
+        if reason:
+            embed_description += f"\nMotivo: {reason}"
+            
+        # Usar el mismo marcador de objeto que en el comando regular
+        current_mute_marker = object()
         
         if duration > 0:
-            self.muted_users[user.id] = interaction.guild.id
-            await asyncio.sleep(duration)
-            if user.id in self.muted_users:
-                await user.remove_roles(muted_role)
-                del self.muted_users[user.id]
+            human_readable_duration = f"{duration} segundos"
+            embed_description += f"\nDuración: {human_readable_duration}"
+            self.muted_users[(user.id, interaction.guild.id)] = current_mute_marker
+            
+            # Programar la tarea para desmutear
+            async def unmute_later():
+                await asyncio.sleep(duration)
+                if self.muted_users.get((user.id, interaction.guild.id)) == current_mute_marker:
+                    try:
+                        # Obtener el miembro actualizado
+                        guild = interaction.guild
+                        member_actual = guild.get_member(user.id)
+                        if member_actual is None:
+                            member_actual = await guild.fetch_member(user.id)
+                            
+                        # Buscar el rol Muted
+                        muted_role = discord.utils.get(guild.roles, name="Muted")
+                        if muted_role and muted_role in member_actual.roles:
+                            await member_actual.remove_roles(muted_role, reason="Tiempo de mute expirado")
+                            self.muted_users.pop((user.id, interaction.guild.id), None)
+                            
+                            # Notificar en el canal
+                            try:
+                                channel = interaction.channel
+                                embed = discord.Embed(
+                                    title="🔊 Usuario desmuteado automáticamente",
+                                    description=f"{member_actual.mention} ha sido desmuteado tras cumplir su tiempo.",
+                                    color=discord.Color.blue(),
+                                    timestamp=datetime.now()
+                                )
+                                await channel.send(embed=embed)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        print(f"Error al desmutear automáticamente: {e}")
+                    
+            # Iniciar la tarea asíncrona
+            self.bot.loop.create_task(unmute_later())
+        else:
+            embed_description += "\nDuración: Indefinida"
 
         embed = discord.Embed(
             title="🔇 Usuario muteado",
-            description=f"{user.mention} fue muteado.\nDuración: {duration}s\nMotivo: {reason}",
-            color=config.EMBED_COLOR,
+            description=embed_description,
+            color=discord.Color.blue(),
             timestamp=datetime.now()
         )
         embed.set_footer(text=f"Muteado por {interaction.user}")
@@ -399,20 +462,25 @@ class Moderation(commands.Cog):
             return
 
         muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
-        if muted_role in user.roles:
-            await user.remove_roles(muted_role)
-            if user.id in self.muted_users:
-                del self.muted_users[user.id]
-            embed = discord.Embed(
-                title="🔊 Usuario desmuteado",
-                description=f"{user.mention} ha sido desmuteado.",
-                color=config.EMBED_COLOR,
-                timestamp=datetime.now()
-            )
-            embed.set_footer(text=f"Desmuteado por {interaction.user}")
-            await interaction.response.send_message(embed=embed)
+        if muted_role and muted_role in user.roles:
+            try:
+                await user.remove_roles(muted_role, reason=f"Desmuteado manualmente por {interaction.user}")
+                self.muted_users.pop((user.id, interaction.guild.id), None)
+                
+                embed = discord.Embed(
+                    title="🔊 Usuario desmuteado",
+                    description=f"{user.mention} ha sido desmuteado.",
+                    color=config.EMBED_COLOR,
+                    timestamp=datetime.now()
+                )
+                embed.set_footer(text=f"Desmuteado por {interaction.user}")
+                await interaction.response.send_message(embed=embed)
+            except discord.Forbidden:
+                await interaction.response.send_message(f"❌ No tengo permisos para desmutear a {user.mention}.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Ocurrió un error al intentar desmutear a {user.mention}: {e}", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Este usuario no está muteado.", ephemeral=True)
+            await interaction.response.send_message("❌ Este usuario no está muteado o el rol 'Muted' no existe.", ephemeral=True)
 
     @app_commands.command(name="purge", description="Elimina mensajes del canal actual.")
     @app_commands.describe(amount="Cantidad de mensajes a eliminar (máximo 100)")
