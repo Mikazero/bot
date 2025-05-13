@@ -106,14 +106,13 @@ class Music(commands.Cog):
         if not ctx.voice_client:
             try:
                 player = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+                player.text_channel = ctx.channel  # Establecer el canal de texto al crear el player
             except Exception as e:
                 await ctx.send(f"❌ Error al conectar al canal de voz: {e}")
                 return
         else:
             player = ctx.voice_client
-        
-        # Almacenar el canal de texto en el player para futuras notificaciones
-        player.text_channel = ctx.channel 
+            player.text_channel = ctx.channel  # Actualizar el canal de texto si el player ya existe
 
         embed_color = discord.Color.blue()
         embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=embed_color)
