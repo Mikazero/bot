@@ -99,7 +99,7 @@ class MinecraftCog(commands.Cog):
             socket.socket = socket._realsocket if hasattr(socket, '_realsocket') else socket.socket
             
     def start_log_monitoring(self):
-        """Inicia el monitoreo del archivo de logs"""
+        """Inicia el monitoreo del archivo de logs y detecta reinicios"""
         try:
             self.observer = Observer()
             handler = MinecraftLogHandler(self)
@@ -107,15 +107,21 @@ class MinecraftCog(commands.Cog):
             self.observer.schedule(handler, log_dir, recursive=False)
             self.observer.start()
             print(f"📝 Monitoreo de logs iniciado: {self.log_file_path}")
+            # Iniciar tarea para detectar reinicio de log
+            if not hasattr(self, 'log_restart_task'):
+                self.log_restart_task = self._log_restart_loop.start()
         except Exception as e:
             print(f"❌ Error iniciando monitoreo de logs: {e}")
     
     def stop_log_monitoring(self):
-        """Detiene el monitoreo del archivo de logs"""
+        """Detiene el monitoreo del archivo de logs y la tarea de reinicio"""
         if self.observer:
             self.observer.stop()
             self.observer.join()
             print("📝 Monitoreo de logs detenido")
+        if hasattr(self, 'log_restart_task'):
+            self.log_restart_task.cancel()
+            del self.log_restart_task
     
     async def process_log_update(self):
         """Procesa las nuevas líneas del log"""
@@ -599,6 +605,33 @@ class MinecraftCog(commands.Cog):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="mcchat_restart", description="Reinicia manualmente el monitor del chat bridge de Minecraft")
+    async def minecraft_chat_restart(self, interaction: discord.Interaction):
+        """Permite reiniciar manualmente el monitor del chat bridge"""
+        # Verificar permisos
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Solo los administradores pueden reiniciar el chat bridge.", ephemeral=True)
+            return
+        self.stop_log_monitoring()
+        await asyncio.sleep(1)
+        self.start_log_monitoring()
+        await interaction.response.send_message("🔄 Chat bridge reiniciado correctamente.", ephemeral=True)
+
+    @tasks.loop(seconds=10)
+    async def _log_restart_loop(self):
+        """Detecta si el archivo de log fue reiniciado y reinicia el monitor automáticamente"""
+        if not self.log_file_path or not os.path.exists(self.log_file_path):
+            return
+        try:
+            size = os.path.getsize(self.log_file_path)
+            if self.last_log_position > size:
+                print("🔄 Detectado reinicio del archivo de logs, reiniciando monitor...")
+                self.stop_log_monitoring()
+                await asyncio.sleep(1)
+                self.start_log_monitoring()
+        except Exception as e:
+            print(f"❌ Error en la detección automática de reinicio de log: {e}")
 
     def cog_unload(self):
         """Limpieza al descargar el cog"""

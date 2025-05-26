@@ -1,0 +1,22 @@
+version: '3.8'
+services:
+  bot-musica:
+    build: ./bot-musica
+    container_name: bot-musica
+    restart: unless-stopped
+    env_file:
+      - .env  # Asegúrate de tener un .env con DISCORD_TOKEN, etc.
+    volumes:
+      - ./bot-musica:/app
+      - ./application.yml:/opt/Lavalink/application.yml # Si Lavalink lo necesita
+    ports:
+      - "2333:2333" # Si expones Lavalink
+
+  bot-minecraft:
+    build: ./bot-minecraft
+    container_name: bot-minecraft
+    restart: unless-stopped
+    env_file:
+      - .env # También necesita DISCORD_TOKEN, MC_SERVER_IP, etc.
+    volumes:
+      - ./bot-minecraft:/app
