@@ -1,0 +1,9 @@
+build:
+  docker:
+    web: bot-musica/Dockerfile
+    minecraft_worker: bot-minecraft/Dockerfile
+ 
+run:
+  web: /start.sh
+  minecraft_worker: python main.py
+ 
