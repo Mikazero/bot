@@ -420,6 +420,23 @@ class MinecraftCog(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
+    @commands.command(name="mcplayers", help="Lista todos los jugadores online. Uso: m.mcplayers")
+    async def text_minecraft_players(self, ctx: commands.Context):
+        """Muestra una lista detallada de jugadores online (versión texto)"""
+        status = await self.get_server_status()
+        if status is None:
+            embed = discord.Embed(title="❌ Error", description="No se pudo conectar al servidor", color=discord.Color.red())
+        elif status.players.online == 0:
+            embed = discord.Embed(title="😴 Servidor Vacío", description="No hay jugadores online en este momento", color=discord.Color.orange())
+        else:
+            embed = discord.Embed(title=f"👥 Jugadores Online ({status.players.online}/{status.players.max})", color=discord.Color.green())
+            if status.players.sample:
+                players_text = "\n".join([f"• {player.name}" for player in status.players.sample])
+                embed.description = f"```\n{players_text}\n```"
+            else:
+                embed.description = "Lista de jugadores no disponible"
+        await ctx.send(embed=embed)
+
     @app_commands.command(name="mcwhitelist", description="Gestiona la whitelist del servidor")
     @app_commands.describe(
         action="Acción a realizar",
@@ -474,6 +491,32 @@ class MinecraftCog(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
+    @commands.command(name="mcwhitelist", help="Gestiona la whitelist. Uso: m.mcwhitelist <add|remove|list|on|off> [jugador]")
+    async def text_minecraft_whitelist(self, ctx: commands.Context, action: str, *, player: str = None):
+        """Gestiona la whitelist del servidor (versión texto)"""
+        action = action.lower()
+        valid_actions = ["add", "remove", "list", "on", "off"]
+        if action not in valid_actions:
+            await ctx.send(f"❌ Acción inválida. Acciones válidas: {', '.join(valid_actions)}")
+            return
+
+        if action in ["add", "remove"] and not player:
+            await ctx.send("❌ Debes especificar un nombre de jugador para esta acción (`add` o `remove`).")
+            return
+        
+        if action == "list":
+            command = "whitelist list"
+        elif action in ["on", "off"]:
+            command = f"whitelist {action}"
+        else: # add o remove
+            command = f"whitelist {action} {player}"
+        
+        result = await self.execute_rcon_command(command)
+        embed = discord.Embed(title="📋 Gestión de Whitelist", color=discord.Color.blue())
+        embed.add_field(name="🔧 Acción", value=f"```{command}```", inline=False)
+        embed.add_field(name="📤 Resultado", value=f"```{result}```", inline=False)
+        await ctx.send(embed=embed)
+
     @app_commands.command(name="mckick", description="Expulsa a un jugador del servidor")
     @app_commands.describe(
         player="Nombre del jugador a expulsar",
@@ -501,6 +544,21 @@ class MinecraftCog(commands.Cog):
         embed.add_field(name="📤 Resultado", value=f"```{result}```", inline=False)
         
         await interaction.followup.send(embed=embed)
+
+    @commands.command(name="mckick", help="Expulsa a un jugador. Uso: m.mckick <jugador> [razón]")
+    async def text_minecraft_kick(self, ctx: commands.Context, player: str, *, reason: str = "Expulsado por un administrador"):
+        """Expulsa a un jugador del servidor (versión texto)"""
+        if not player:
+            await ctx.send("❌ Debes especificar el nombre del jugador a expulsar.")
+            return
+
+        command = f"kick {player} {reason}"
+        result = await self.execute_rcon_command(command)
+        embed = discord.Embed(title="👢 Jugador Expulsado", color=discord.Color.orange())
+        embed.add_field(name="👤 Jugador", value=player, inline=True)
+        embed.add_field(name="📝 Razón", value=reason, inline=True)
+        embed.add_field(name="📤 Resultado", value=f"```{result}```", inline=False)
+        await ctx.send(embed=embed)
 
     @app_commands.command(name="mcchat", description="Configura el puente de chat entre Minecraft y Discord")
     @app_commands.describe(
@@ -579,6 +637,49 @@ class MinecraftCog(commands.Cog):
                 )
         
         await interaction.response.send_message(embed=embed)
+
+    @commands.command(name="mcchat", help="Configura el chat bridge. Uso: m.mcchat <enable|disable|status|set_channel> [canal]")
+    async def text_minecraft_chat_bridge(self, ctx: commands.Context, action: str, channel: discord.TextChannel = None):
+        """Configura el puente de chat (versión texto)"""
+        action = action.lower()
+        valid_actions = ["enable", "disable", "status", "set_channel"]
+        if action not in valid_actions:
+            await ctx.send(f"❌ Acción inválida. Acciones válidas: {', '.join(valid_actions)}")
+            return
+
+        embed = discord.Embed(title="🌉 Puente de Chat Minecraft-Discord", color=discord.Color.blue())
+        if action == "enable":
+            if not self.log_file_path or not os.path.exists(self.log_file_path):
+                embed.description = "❌ No se puede activar: archivo de logs no configurado o no existe"
+                embed.add_field(name="📝 Configuración necesaria", value="Configura `MC_LOG_PATH`", inline=False)
+            elif not self.chat_channel_id_config:
+                embed.description = "❌ No se puede activar: canal de chat no configurado"
+                embed.add_field(name="🔧 Solución", value="Usa `m.mcchat set_channel #canal`", inline=False)
+            else:
+                self.chat_bridge_enabled = True
+                embed.description = "✅ Puente de chat activado"
+                embed.color = discord.Color.green()
+        elif action == "disable":
+            self.chat_bridge_enabled = False
+            embed.description = "❌ Puente de chat desactivado"
+            embed.color = discord.Color.red()
+        elif action == "set_channel":
+            if channel:
+                self.chat_channel_id_config = channel.id
+                embed.description = f"✅ Canal configurado para el chat bridge: {channel.mention}"
+                embed.color = discord.Color.green()
+            else:
+                embed.description = "❌ Debes especificar un canal (mención, ID o nombre)."
+        elif action == "status":
+            status_emoji = "✅" if self.chat_bridge_enabled else "❌"
+            embed.description = f"{status_emoji} Estado: {'Activado' if self.chat_bridge_enabled else 'Desactivado'}"
+            embed.add_field(name="📁 Archivo de logs", value=f"```{self.log_file_path if self.log_file_path else 'No configurado'}```", inline=False)
+            if self.chat_channel_id_config:
+                chat_channel_for_bridge = self.bot.get_channel(self.chat_channel_id_config)
+                embed.add_field(name="💬 Canal de chat (bridge)", value=chat_channel_for_bridge.mention if chat_channel_for_bridge else "Canal no encontrado", inline=False)
+            else:
+                embed.add_field(name="💬 Canal de chat (bridge)", value="No configurado", inline=False)
+        await ctx.send(embed=embed)
 
     @app_commands.command(name="mcsay", description="Envía un mensaje al chat del servidor de Minecraft")
     @app_commands.describe(message="Mensaje a enviar al servidor")
@@ -690,6 +791,20 @@ class MinecraftCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @commands.command(name="mcconfig", help="Muestra la configuración actual de Minecraft. Uso: m.mcconfig")
+    async def text_minecraft_config(self, ctx: commands.Context):
+        """Muestra la configuración del bot para Minecraft (versión texto)"""
+        embed = discord.Embed(title="⚙️ Configuración de Minecraft", color=discord.Color.blue())
+        embed.add_field(name="🌐 Servidor", value=f"`{self.server_ip}:{self.server_port}`", inline=True)
+        embed.add_field(name="🔧 RCON", value=f"Puerto: `{self.rcon_port}`\nConfigurado: {'✅' if self.rcon_password else '❌'}", inline=True)
+        embed.add_field(name="🌉 Chat Bridge", value=f"Estado: {'✅ Activo' if self.chat_bridge_enabled else '❌ Inactivo'}\nCanal: {'✅ Configurado' if self.chat_channel_id_config else '❌ No configurado'}", inline=True)
+        if self.proxy_config:
+            embed.add_field(name="🌐 IP Estática", value=f"✅ Fixie Socks configurado\nHost: `{self.proxy_config['host']}`", inline=True)
+        else:
+            embed.add_field(name="🌐 IP Estática", value="❌ No configurado", inline=True)
+        embed.add_field(name="📋 Variables de Entorno", value="```\nMC_SERVER_IP\nMC_SERVER_PORT\nMC_RCON_PORT\nMC_RCON_PASSWORD\nMC_CHAT_CHANNEL_ID\nMC_LOG_PATH\nFIXIE_SOCKS_HOST\nMC_ALLOWED_GUILD_ID\nMC_ALLOWED_CHANNEL_ID\nMC_ALLOWED_USER_ID\n```", inline=False)
+        await ctx.send(embed=embed)
+
     @app_commands.command(name="mcchat_restart", description="Reinicia manualmente el monitor del chat bridge de Minecraft")
     async def minecraft_chat_restart(self, interaction: discord.Interaction):
         """Permite reiniciar manualmente el monitor del chat bridge"""
@@ -700,6 +815,16 @@ class MinecraftCog(commands.Cog):
         await asyncio.sleep(1)
         self.start_log_monitoring()
         await interaction.response.send_message("🔄 Chat bridge reiniciado correctamente.", ephemeral=True)
+
+    @commands.command(name="mcchat_restart", help="Reinicia el monitor del chat bridge. Uso: m.mcchat_restart")
+    async def text_minecraft_chat_restart(self, ctx: commands.Context):
+        """Reinicia manualmente el monitor del chat bridge (versión texto)"""
+        # Aquí podrías añadir una comprobación de ctx.author.guild_permissions.administrator si quisieras
+        # pero como solo tu usuario puede usarlo, el cog_check es suficiente por ahora.
+        self.stop_log_monitoring()
+        await asyncio.sleep(1) # Dar tiempo para que se detenga completamente
+        self.start_log_monitoring()
+        await ctx.send("🔄 Chat bridge reiniciado correctamente.")
 
     @tasks.loop(seconds=10)
     async def _log_restart_loop(self):
