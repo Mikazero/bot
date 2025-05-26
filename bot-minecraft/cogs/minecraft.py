@@ -36,7 +36,7 @@ class MinecraftCog(commands.Cog):
         self.rcon_password = os.environ.get("MC_RCON_PASSWORD", "")
         
         # Configuración del chat bridge
-        self.chat_channel_id = int(os.environ.get("MC_CHAT_CHANNEL_ID", "0"))
+        self.chat_channel_id_config = int(os.environ.get("MC_CHAT_CHANNEL_ID", "0"))
         self.log_file_path = os.environ.get("MC_LOG_PATH", "")
         self.chat_bridge_enabled = False
         self.last_log_position = 0
@@ -46,6 +46,22 @@ class MinecraftCog(commands.Cog):
         self.fixie_socks_host = os.environ.get("FIXIE_SOCKS_HOST")
         self.proxy_config = self._parse_fixie_socks_url()
         
+        # IDs para restricciones de acceso (leer de variables de entorno)
+        # Es importante convertir a int si se compararán con IDs numéricos de Discord
+        raw_guild_id = os.environ.get("MC_ALLOWED_GUILD_ID")
+        raw_channel_id = os.environ.get("MC_ALLOWED_CHANNEL_ID")
+        raw_user_id = os.environ.get("MC_ALLOWED_USER_ID")
+
+        self.allowed_guild_id = int(raw_guild_id) if raw_guild_id else None
+        self.allowed_channel_id = int(raw_channel_id) if raw_channel_id else None
+        self.allowed_user_id = int(raw_user_id) if raw_user_id else None
+
+        # Imprimir configuración de restricción para depuración
+        print(f"[MinecraftCog] Restricciones de acceso cargadas:")
+        print(f"  - Servidor permitido: {self.allowed_guild_id if self.allowed_guild_id else 'Cualquiera'}")
+        print(f"  - Canal permitido: {self.allowed_channel_id if self.allowed_channel_id else 'Cualquiera'}")
+        print(f"  - Usuario permitido: {self.allowed_user_id if self.allowed_user_id else 'Cualquiera'}")
+
         # Patrones regex para el chat
         self.chat_pattern = re.compile(r'\[(\d{2}:\d{2}:\d{2})\] \[Server thread/INFO\]: <(\w+)> (.+)')
         self.join_pattern = re.compile(r'\[(\d{2}:\d{2}:\d{2})\] \[Server thread/INFO\]: (\w+) joined the game')
@@ -125,7 +141,7 @@ class MinecraftCog(commands.Cog):
     
     async def process_log_update(self):
         """Procesa las nuevas líneas del log"""
-        if not self.chat_bridge_enabled or not self.chat_channel_id:
+        if not self.chat_bridge_enabled or not self.chat_channel_id_config:
             return
             
         try:
@@ -142,7 +158,7 @@ class MinecraftCog(commands.Cog):
     
     async def process_log_line(self, line):
         """Procesa una línea individual del log"""
-        channel = self.bot.get_channel(self.chat_channel_id)
+        channel = self.bot.get_channel(self.chat_channel_id_config)
         if not channel:
             return
             
@@ -513,7 +529,7 @@ class MinecraftCog(commands.Cog):
                     value="Configura la variable `MC_LOG_PATH` con la ruta al archivo `latest.log`",
                     inline=False
                 )
-            elif not self.chat_channel_id:
+            elif not self.chat_channel_id_config:
                 embed.description = "❌ No se puede activar: canal de chat no configurado"
                 embed.add_field(
                     name="🔧 Solución",
@@ -532,8 +548,8 @@ class MinecraftCog(commands.Cog):
         
         elif action == "set_channel":
             if channel:
-                self.chat_channel_id = channel.id
-                embed.description = f"✅ Canal configurado: {channel.mention}"
+                self.chat_channel_id_config = channel.id
+                embed.description = f"✅ Canal configurado para el chat bridge: {channel.mention}"
                 embed.color = discord.Color.green()
             else:
                 embed.description = "❌ Debes especificar un canal"
@@ -548,16 +564,16 @@ class MinecraftCog(commands.Cog):
                 inline=False
             )
             
-            if self.chat_channel_id:
-                chat_channel = self.bot.get_channel(self.chat_channel_id)
+            if self.chat_channel_id_config:
+                chat_channel_for_bridge = self.bot.get_channel(self.chat_channel_id_config)
                 embed.add_field(
-                    name="💬 Canal de chat",
-                    value=chat_channel.mention if chat_channel else "Canal no encontrado",
+                    name="💬 Canal de chat (bridge)",
+                    value=chat_channel_for_bridge.mention if chat_channel_for_bridge else "Canal no encontrado",
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="💬 Canal de chat",
+                    name="💬 Canal de chat (bridge)",
                     value="No configurado",
                     inline=False
                 )
@@ -648,7 +664,7 @@ class MinecraftCog(commands.Cog):
         
         embed.add_field(
             name="🌉 Chat Bridge",
-            value=f"Estado: {'✅ Activo' if self.chat_bridge_enabled else '❌ Inactivo'}\nCanal: {'✅ Configurado' if self.chat_channel_id else '❌ No configurado'}",
+            value=f"Estado: {'✅ Activo' if self.chat_bridge_enabled else '❌ Inactivo'}\nCanal: {'✅ Configurado' if self.chat_channel_id_config else '❌ No configurado'}",
             inline=True
         )
         
@@ -705,6 +721,68 @@ class MinecraftCog(commands.Cog):
         self.stop_log_monitoring()
         # Resetear proxy al descargar el cog
         self._reset_proxy()
+
+    # --- Funciones de Check Personalizadas ---
+    def is_allowed_guild(self, ctx_or_interaction) -> bool:
+        if not self.allowed_guild_id: return True # Si no está configurado, permitir todos
+        guild_id = ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id
+        return guild_id == self.allowed_guild_id
+
+    def is_allowed_channel(self, ctx_or_interaction) -> bool:
+        if not self.allowed_channel_id: return True
+        channel_id = ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id
+        return channel_id == self.allowed_channel_id
+
+    def is_allowed_user(self, ctx_or_interaction) -> bool:
+        if not self.allowed_user_id: return True
+        user_id = ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id
+        return user_id == self.allowed_user_id
+
+    # --- Check Combinado para aplicar a comandos ---
+    async def combined_access_check(self, ctx_or_interaction) -> bool:
+        if not self.is_allowed_guild(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: Guild ID {ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id} no permitido.")
+            raise commands.CheckFailure("Este comando no está permitido en este servidor.")
+        if not self.is_allowed_channel(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: Channel ID {ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id} no permitido.")
+            raise commands.CheckFailure("Este comando no está permitido en este canal.")
+        if not self.is_allowed_user(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: User ID {ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id} no permitido.")
+            raise commands.CheckFailure("No tienes permiso para usar este comando.")
+        return True
+
+    # Sobrescribir cog_check para aplicar a todos los comandos del cog
+    async def cog_check(self, ctx_or_interaction):
+        # El argumento puede ser commands.Context o discord.Interaction
+        # Necesitamos manejar ambos casos para obtener los IDs relevantes
+        if isinstance(ctx_or_interaction, commands.Context):
+            return await self.combined_access_check(ctx_or_interaction) # Para comandos de texto
+        elif isinstance(ctx_or_interaction, discord.Interaction): # Para comandos de aplicación
+            # Para interacciones, el check se aplica antes del callback del comando
+            # Aquí simulamos el comportamiento de un check de app_command aunque app_commands.check es más idiomático
+            # Sin embargo, para unificar, usamos este cog_check.
+            # Si el comando es de app_command, discord.py ya lo maneja de forma que combined_access_check puede ser llamado.
+            return await self.combined_access_check(ctx_or_interaction)
+        return False # No debería llegar aquí si es un comando conocido
+    
+    # Manejador de errores para CheckFailure en este Cog
+    async def cog_command_error(self, ctx_or_interaction, error):
+        # ctx_or_interaction puede ser Context o Interaction
+        if isinstance(error, commands.CheckFailure):
+            message = str(error) if str(error) else "No cumples con los requisitos para usar este comando aquí."
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                # Si la interacción ya fue respondida (defer), usar followup
+                if ctx_or_interaction.response.is_done():
+                    await ctx_or_interaction.followup.send(message, ephemeral=True)
+                else:
+                    await ctx_or_interaction.response.send_message(message, ephemeral=True)
+            else: # Es commands.Context
+                await ctx_or_interaction.send(message)
+        else:
+            # Para otros errores, puedes imprimirlos o manejarlos como antes
+            print(f"[MinecraftCog] Error no manejado por CheckFailure: {error}")
+            # Si tienes un manejador de errores global, podría ser mejor dejar que se propague
+            # raise error
 
 async def setup(bot):
     await bot.add_cog(MinecraftCog(bot)) 
