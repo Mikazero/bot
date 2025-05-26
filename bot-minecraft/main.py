@@ -7,7 +7,7 @@ import os
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='g.', intents=intents)
+bot = commands.Bot(command_prefix='m.', intents=intents)
 
 # ---------- EVENTOS GLOBALES ----------
 @bot.event
