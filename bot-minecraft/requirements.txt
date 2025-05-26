@@ -2,6 +2,6 @@ discord.py>=2.3.2
 python-dotenv
 requests
 mcstatus>=11.0.0
-mcrcon>=2.3
+mcrcon>=0.7.0
 watchdog>=3.0.0
 PySocks>=1.7.1
