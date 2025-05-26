@@ -3,7 +3,19 @@ from discord.ext import commands
 from discord import app_commands
 import wavelink
 import os
+import threading
+from flask import Flask
 
+# Configuración del servidor Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot de música funcionando!"
+
+def run_flask_app():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -40,4 +52,9 @@ async def setup_hook():
 
 # --------- ARRANQUE DEL BOT ----------
 if __name__ == '__main__':
+    # Iniciar Flask en un hilo separado
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
     bot.run(os.environ.get("DISCORD_TOKEN"))
