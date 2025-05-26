@@ -210,10 +210,19 @@ class MinecraftCog(commands.Cog):
             # Configurar proxy si está disponible
             proxy_used = self._setup_proxy()
             
-            with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
-                response = mcr.command(command)
-                return response
+            # Función bloqueante para ejecutar en un hilo separado
+            def rcon_blocking_call():
+                # MCRcon necesita ser instanciado dentro de la función que corre en el hilo
+                with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
+                    return mcr.command(command)
+            
+            response = await asyncio.to_thread(rcon_blocking_call)
+            return response
         except Exception as e:
+            # Imprimir el traceback completo para mejor depuración en el servidor
+            import traceback
+            print(f"❌ Error detallado ejecutando comando RCON '{command}':")
+            traceback.print_exc()
             return f"❌ Error ejecutando comando: {str(e)}"
         finally:
             # Resetear proxy
@@ -285,19 +294,54 @@ class MinecraftCog(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
+    @commands.command(name="mcstatus", help="Muestra el estado del servidor de Minecraft. Uso: m.mcstatus")
+    async def text_minecraft_status(self, ctx: commands.Context):
+        """Comando de texto para ver el estado del servidor"""
+        # Podrías enviar un mensaje de "cargando" aquí si lo deseas
+        # await ctx.send("Consultando estado del servidor...")
+        
+        status = await self.get_server_status() # get_server_status ya usa to_thread
+        
+        if status is None:
+            embed = discord.Embed(
+                title="🔴 Servidor Offline",
+                description=f"No se pudo conectar al servidor `{self.server_ip}:{self.server_port}`",
+                color=discord.Color.red()
+            )
+        else:
+            embed = discord.Embed(
+                title="🟢 Servidor Online",
+                description=f"**{self.server_ip}:{self.server_port}**",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="👥 Jugadores", value=f"{status.players.online}/{status.players.max}", inline=True)
+            embed.add_field(name="📊 Latencia", value=f"{status.latency:.1f}ms", inline=True)
+            embed.add_field(name="🎮 Versión", value=status.version.name, inline=True)
+            if status.players.online > 0 and status.players.sample:
+                players_list = [player.name for player in status.players.sample]
+                if len(players_list) > 10:
+                    players_text = ", ".join(players_list[:10]) + f" y {len(players_list) - 10} más..."
+                else:
+                    players_text = ", ".join(players_list)
+                embed.add_field(name="🎯 Jugadores Online", value=f"```{players_text}```", inline=False)
+            if self.proxy_config:
+                embed.add_field(name="🌐 Conexión", value="✅ A través de IP estática (Fixie Socks)", inline=True)
+            embed.timestamp = datetime.now()
+        
+        await ctx.send(embed=embed)
+
     @app_commands.command(name="mccommand", description="Ejecuta un comando en el servidor de Minecraft")
     @app_commands.describe(command="El comando a ejecutar (sin el /)")
     async def minecraft_command(self, interaction: discord.Interaction, command: str):
         """Ejecuta un comando RCON en el servidor"""
-        # Verificar permisos (solo administradores)
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden ejecutar comandos del servidor.", ephemeral=True)
             return
         
         await interaction.response.defer()
         
-        # Ejecutar comando
-        result = await asyncio.to_thread(self.execute_rcon_command, command)
+        # Ejecutar comando directamente con await
+        result = await self.execute_rcon_command(command)
         
         embed = discord.Embed(
             title="🎮 Comando Ejecutado",
@@ -374,7 +418,6 @@ class MinecraftCog(commands.Cog):
     ])
     async def minecraft_whitelist(self, interaction: discord.Interaction, action: str, player: str = None):
         """Gestiona la whitelist del servidor"""
-        # Verificar permisos
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden gestionar la whitelist.", ephemeral=True)
             return
@@ -393,7 +436,8 @@ class MinecraftCog(commands.Cog):
         else:
             command = f"whitelist {action} {player}"
         
-        result = await asyncio.to_thread(self.execute_rcon_command, command)
+        # Ejecutar comando directamente con await
+        result = await self.execute_rcon_command(command)
         
         embed = discord.Embed(
             title="📋 Gestión de Whitelist",
@@ -421,7 +465,6 @@ class MinecraftCog(commands.Cog):
     )
     async def minecraft_kick(self, interaction: discord.Interaction, player: str, reason: str = "Expulsado por un administrador"):
         """Expulsa a un jugador del servidor"""
-        # Verificar permisos
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden expulsar jugadores.", ephemeral=True)
             return
@@ -429,7 +472,8 @@ class MinecraftCog(commands.Cog):
         await interaction.response.defer()
         
         command = f"kick {player} {reason}"
-        result = await asyncio.to_thread(self.execute_rcon_command, command)
+        # Ejecutar comando directamente con await
+        result = await self.execute_rcon_command(command)
         
         embed = discord.Embed(
             title="👢 Jugador Expulsado",
@@ -455,7 +499,6 @@ class MinecraftCog(commands.Cog):
     ])
     async def minecraft_chat_bridge(self, interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
         """Configura el puente de chat entre Minecraft y Discord"""
-        # Verificar permisos
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden configurar el chat bridge.", ephemeral=True)
             return
@@ -527,11 +570,12 @@ class MinecraftCog(commands.Cog):
         """Envía un mensaje al chat del servidor desde Discord"""
         await interaction.response.defer()
         
-        # Formatear el mensaje con el nombre del usuario de Discord
         formatted_message = f"[Discord] {interaction.user.display_name}: {message}"
-        command = f"say {formatted_message}"
-        
-        result = await asyncio.to_thread(self.execute_rcon_command, command)
+        # Corregir la llamada a execute_rcon_command: quitar rcon_password y asegurar await (ya estaba)
+        # El problema original era que 'result' no se await-eaba ANTES de usarlo en el if.
+        # Pero ahora, execute_rcon_command es async y devuelve el resultado directamente.
+        rcon_command_to_send = f"say {formatted_message}"
+        result_from_rcon = await self.execute_rcon_command(rcon_command_to_send)
         
         embed = discord.Embed(
             title="💬 Mensaje Enviado",
@@ -552,11 +596,35 @@ class MinecraftCog(commands.Cog):
         
         embed.add_field(
             name="📤 Estado",
-            value="✅ Enviado al servidor" if "Unknown command" not in result else "❌ Error enviando mensaje",
+            value="✅ Enviado al servidor" if "Unknown command" not in result_from_rcon and "Error" not in result_from_rcon else "❌ Error enviando mensaje", # Comprobación más robusta
             inline=False
         )
         
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True) # Mantener efímero para el slash command
+
+    @commands.command(name="mcsay", help="Envía un mensaje al chat del servidor de Minecraft. Uso: m.mcsay <mensaje>")
+    async def text_minecraft_say(self, ctx: commands.Context, *, message: str):
+        """Comando de texto para enviar un mensaje al servidor de Minecraft"""
+        if not message:
+            await ctx.send("❌ Debes escribir un mensaje para enviar.")
+            return
+
+        formatted_message = f"[Discord] {ctx.author.display_name}: {message}"
+        rcon_command_to_send = f"say {formatted_message}"
+        result_from_rcon = await self.execute_rcon_command(rcon_command_to_send)
+
+        embed = discord.Embed(
+            title="💬 Mensaje Enviado (vía comando de texto)",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="👤 Usuario", value=ctx.author.display_name, inline=True)
+        embed.add_field(name="💬 Mensaje", value=message, inline=False)
+        embed.add_field(
+            name="📤 Estado",
+            value="✅ Enviado al servidor" if "Unknown command" not in result_from_rcon and "Error" not in result_from_rcon else "❌ Error enviando mensaje", # Comprobación más robusta
+            inline=False
+        )
+        await ctx.send(embed=embed) # Los mensajes de comandos de texto no son efímeros por defecto
 
     @app_commands.command(name="mcconfig", description="Muestra la configuración actual del servidor de Minecraft")
     async def minecraft_config(self, interaction: discord.Interaction):
@@ -609,7 +677,6 @@ class MinecraftCog(commands.Cog):
     @app_commands.command(name="mcchat_restart", description="Reinicia manualmente el monitor del chat bridge de Minecraft")
     async def minecraft_chat_restart(self, interaction: discord.Interaction):
         """Permite reiniciar manualmente el monitor del chat bridge"""
-        # Verificar permisos
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden reiniciar el chat bridge.", ephemeral=True)
             return
