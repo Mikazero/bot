@@ -15,17 +15,6 @@ import threading
 import socks
 import socket
 
-class MinecraftLogHandler(FileSystemEventHandler):
-    def __init__(self, minecraft_cog):
-        self.minecraft_cog = minecraft_cog
-        self.last_position = 0
-        
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith('latest.log'):
-            asyncio.create_task(self.minecraft_cog.process_log_update())
-
 class MinecraftCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -39,8 +28,7 @@ class MinecraftCog(commands.Cog):
         self.chat_channel_id_config = int(os.environ.get("MC_CHAT_CHANNEL_ID", "0"))
         self.log_file_path = os.environ.get("MC_LOG_PATH", "")
         self.chat_bridge_enabled = False
-        self.last_log_position = 0
-        self.observer = None
+        self.last_processed_line_identifier = None
         
         # Configuración del proxy Fixie Socks
         self.fixie_socks_host = os.environ.get("FIXIE_SOCKS_HOST")
@@ -68,9 +56,14 @@ class MinecraftCog(commands.Cog):
         self.leave_pattern = re.compile(r'\[(\d{2}:\d{2}:\d{2})\] \[Server thread/INFO\]: (\w+) left the game')
         self.death_pattern = re.compile(r'\[(\d{2}:\d{2}:\d{2})\] \[Server thread/INFO\]: (\w+) (.+)')
         
-        # Iniciar el monitor de logs si está configurado
-        if self.log_file_path and os.path.exists(self.log_file_path):
-            self.start_log_monitoring()
+        # Nuevas variables para el API de logs remotos
+        self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
+        self.mc_log_api_token = os.environ.get("MC_LOG_API_TOKEN")
+        
+        # Configuración del proxy Fixie Socks
+        self.proxy_config = self._parse_fixie_socks_url()
+        
+        self.remote_log_polling_task.start()
     
     def _parse_fixie_socks_url(self):
         """Parsea la URL de Fixie Socks para extraer las credenciales del proxy"""
@@ -114,48 +107,6 @@ class MinecraftCog(commands.Cog):
         if self.proxy_config:
             socket.socket = socket._realsocket if hasattr(socket, '_realsocket') else socket.socket
             
-    def start_log_monitoring(self):
-        """Inicia el monitoreo del archivo de logs y detecta reinicios"""
-        try:
-            self.observer = Observer()
-            handler = MinecraftLogHandler(self)
-            log_dir = os.path.dirname(self.log_file_path)
-            self.observer.schedule(handler, log_dir, recursive=False)
-            self.observer.start()
-            print(f"📝 Monitoreo de logs iniciado: {self.log_file_path}")
-            # Iniciar tarea para detectar reinicio de log
-            if not hasattr(self, 'log_restart_task'):
-                self.log_restart_task = self._log_restart_loop.start()
-        except Exception as e:
-            print(f"❌ Error iniciando monitoreo de logs: {e}")
-    
-    def stop_log_monitoring(self):
-        """Detiene el monitoreo del archivo de logs y la tarea de reinicio"""
-        if self.observer:
-            self.observer.stop()
-            self.observer.join()
-            print("📝 Monitoreo de logs detenido")
-        if hasattr(self, 'log_restart_task'):
-            self.log_restart_task.cancel()
-            del self.log_restart_task
-    
-    async def process_log_update(self):
-        """Procesa las nuevas líneas del log"""
-        if not self.chat_bridge_enabled or not self.chat_channel_id_config:
-            return
-            
-        try:
-            with open(self.log_file_path, 'r', encoding='utf-8') as f:
-                f.seek(self.last_log_position)
-                new_lines = f.readlines()
-                self.last_log_position = f.tell()
-                
-            for line in new_lines:
-                await self.process_log_line(line.strip())
-                
-        except Exception as e:
-            print(f"❌ Error procesando log: {e}")
-    
     async def process_log_line(self, line):
         """Procesa una línea individual del log"""
         channel = self.bot.get_channel(self.chat_channel_id_config)
@@ -580,28 +531,26 @@ class MinecraftCog(commands.Cog):
         embed = discord.Embed(title="🌉 Puente de Chat Minecraft-Discord", color=discord.Color.blue())
         
         if action == "enable":
-            if not self.log_file_path or not os.path.exists(self.log_file_path):
-                embed.description = "❌ No se puede activar: archivo de logs no configurado o no existe"
-                embed.add_field(
-                    name="📝 Configuración necesaria",
-                    value="Configura la variable `MC_LOG_PATH` con la ruta al archivo `latest.log`",
-                    inline=False
-                )
+            if not self.mc_log_api_url or not self.mc_log_api_token:
+                embed.description = "❌ No se puede activar: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados en el bot."
             elif not self.chat_channel_id_config:
-                embed.description = "❌ No se puede activar: canal de chat no configurado"
-                embed.add_field(
-                    name="🔧 Solución",
-                    value="Usa `/mcchat set_channel` para configurar el canal",
-                    inline=False
-                )
+                embed.description = "❌ No se puede activar: canal de chat no configurado en Discord."
+                embed.add_field(name="🔧 Solución", value="Usa `/mcchat set_channel` para configurar el canal", inline=False)
             else:
                 self.chat_bridge_enabled = True
-                embed.description = "✅ Puente de chat activado"
+                if not self.remote_log_polling_task.is_running():
+                    try:
+                        self.remote_log_polling_task.start()
+                        embed.description = "✅ Puente de chat activado. Iniciando sondeo de logs remotos."
+                    except RuntimeError:
+                        embed.description = "✅ Puente de chat ya estaba intentando activarse o ya está activo."
+                else:
+                    embed.description = "✅ Puente de chat activado. El sondeo de logs remotos ya está en curso."
                 embed.color = discord.Color.green()
         
         elif action == "disable":
             self.chat_bridge_enabled = False
-            embed.description = "❌ Puente de chat desactivado"
+            embed.description = "❌ Puente de chat desactivado. El sondeo de logs remotos se detendrá en la próxima iteración o ya está inactivo."
             embed.color = discord.Color.red()
         
         elif action == "set_channel":
@@ -614,11 +563,20 @@ class MinecraftCog(commands.Cog):
         
         elif action == "status":
             status_emoji = "✅" if self.chat_bridge_enabled else "❌"
-            embed.description = f"{status_emoji} Estado: {'Activado' if self.chat_bridge_enabled else 'Desactivado'}"
+            task_status = "Activa y sondeando" if self.remote_log_polling_task.is_running() and self.chat_bridge_enabled else "Inactiva"
+            if self.chat_bridge_enabled and (not self.mc_log_api_url or not self.mc_log_api_token):
+                task_status = "Configuración API incompleta"
+            
+            embed.description = f"{status_emoji} Estado General: {'Activado' if self.chat_bridge_enabled else 'Desactivado'}\n📡 Tarea de Sondeo: {task_status}"
             
             embed.add_field(
-                name="📁 Archivo de logs",
-                value=f"```{self.log_file_path if self.log_file_path else 'No configurado'}```",
+                name="🌐 URL del API de Logs",
+                value=f"```{self.mc_log_api_url if self.mc_log_api_url else 'No configurado'}```",
+                inline=False
+            )
+            embed.add_field(
+                name="🔑 Token API",
+                value=f"{'Configurado' if self.mc_log_api_token else 'No configurado'}",
                 inline=False
             )
             
@@ -649,19 +607,25 @@ class MinecraftCog(commands.Cog):
 
         embed = discord.Embed(title="🌉 Puente de Chat Minecraft-Discord", color=discord.Color.blue())
         if action == "enable":
-            if not self.log_file_path or not os.path.exists(self.log_file_path):
-                embed.description = "❌ No se puede activar: archivo de logs no configurado o no existe"
-                embed.add_field(name="📝 Configuración necesaria", value="Configura `MC_LOG_PATH`", inline=False)
+            if not self.mc_log_api_url or not self.mc_log_api_token:
+                embed.description = "❌ No se puede activar: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados."
             elif not self.chat_channel_id_config:
-                embed.description = "❌ No se puede activar: canal de chat no configurado"
+                embed.description = "❌ No se puede activar: canal de chat no configurado."
                 embed.add_field(name="🔧 Solución", value="Usa `m.mcchat set_channel #canal`", inline=False)
             else:
                 self.chat_bridge_enabled = True
-                embed.description = "✅ Puente de chat activado"
+                if not self.remote_log_polling_task.is_running():
+                    try:
+                        self.remote_log_polling_task.start()
+                        embed.description = "✅ Puente de chat activado. Iniciando sondeo de logs remotos."
+                    except RuntimeError:
+                        embed.description = "✅ Puente de chat ya estaba intentando activarse o ya está activo."
+                else:
+                    embed.description = "✅ Puente de chat activado. El sondeo de logs remotos ya está en curso."
                 embed.color = discord.Color.green()
         elif action == "disable":
             self.chat_bridge_enabled = False
-            embed.description = "❌ Puente de chat desactivado"
+            embed.description = "❌ Puente de chat desactivado. El sondeo de logs remotos se detendrá."
             embed.color = discord.Color.red()
         elif action == "set_channel":
             if channel:
@@ -672,8 +636,13 @@ class MinecraftCog(commands.Cog):
                 embed.description = "❌ Debes especificar un canal (mención, ID o nombre)."
         elif action == "status":
             status_emoji = "✅" if self.chat_bridge_enabled else "❌"
-            embed.description = f"{status_emoji} Estado: {'Activado' if self.chat_bridge_enabled else 'Desactivado'}"
-            embed.add_field(name="📁 Archivo de logs", value=f"```{self.log_file_path if self.log_file_path else 'No configurado'}```", inline=False)
+            task_status = "Activa y sondeando" if self.remote_log_polling_task.is_running() and self.chat_bridge_enabled else "Inactiva"
+            if self.chat_bridge_enabled and (not self.mc_log_api_url or not self.mc_log_api_token):
+                task_status = "Configuración API incompleta"
+
+            embed.description = f"{status_emoji} Estado General: {'Activado' if self.chat_bridge_enabled else 'Desactivado'}\n📡 Tarea de Sondeo: {task_status}"
+            embed.add_field(name="🌐 URL API Logs", value=f"```{self.mc_log_api_url if self.mc_log_api_url else 'No configurado'}```", inline=False)
+            embed.add_field(name="🔑 Token API", value=f"{'Configurado' if self.mc_log_api_token else 'No configurado'}", inline=False)
             if self.chat_channel_id_config:
                 chat_channel_for_bridge = self.bot.get_channel(self.chat_channel_id_config)
                 embed.add_field(name="💬 Canal de chat (bridge)", value=chat_channel_for_bridge.mention if chat_channel_for_bridge else "Canal no encontrado", inline=False)
@@ -811,9 +780,9 @@ class MinecraftCog(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden reiniciar el chat bridge.", ephemeral=True)
             return
-        self.stop_log_monitoring()
+        self.remote_log_polling_task.cancel()
         await asyncio.sleep(1)
-        self.start_log_monitoring()
+        self.remote_log_polling_task.start()
         await interaction.response.send_message("🔄 Chat bridge reiniciado correctamente.", ephemeral=True)
 
     @commands.command(name="mcchat_restart", help="Reinicia el monitor del chat bridge. Uso: m.mcchat_restart")
@@ -821,30 +790,57 @@ class MinecraftCog(commands.Cog):
         """Reinicia manualmente el monitor del chat bridge (versión texto)"""
         # Aquí podrías añadir una comprobación de ctx.author.guild_permissions.administrator si quisieras
         # pero como solo tu usuario puede usarlo, el cog_check es suficiente por ahora.
-        self.stop_log_monitoring()
+        self.remote_log_polling_task.cancel()
         await asyncio.sleep(1) # Dar tiempo para que se detenga completamente
-        self.start_log_monitoring()
+        self.remote_log_polling_task.start()
         await ctx.send("🔄 Chat bridge reiniciado correctamente.")
 
-    @tasks.loop(seconds=10)
-    async def _log_restart_loop(self):
-        """Detecta si el archivo de log fue reiniciado y reinicia el monitor automáticamente"""
-        if not self.log_file_path or not os.path.exists(self.log_file_path):
+    @tasks.loop(seconds=5)
+    async def remote_log_polling_task(self):
+        if not self.chat_bridge_enabled or not self.mc_log_api_url or not self.mc_log_api_token or not self.chat_channel_id_config:
+            # Desactivar la tarea si no está configurada o habilitada para evitar spam de errores
+            if self.chat_bridge_enabled and (not self.mc_log_api_url or not self.mc_log_api_token):
+                print("❌ Chat bridge activado pero MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados. Deteniendo polling.")
+                # Podrías querer desactivar self.chat_bridge_enabled aquí o enviar un mensaje al admin.
             return
+
         try:
-            size = os.path.getsize(self.log_file_path)
-            if self.last_log_position > size:
-                print("🔄 Detectado reinicio del archivo de logs, reiniciando monitor...")
-                self.stop_log_monitoring()
-                await asyncio.sleep(1)
-                self.start_log_monitoring()
+            async with aiohttp.ClientSession() as session:
+                headers = {'X-API-Token': self.mc_log_api_token}
+                # El API de ejemplo no necesita parámetros para la posición, la maneja internamente por cliente (simplificado)
+                async with session.get(self.mc_log_api_url, headers=headers, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        new_lines = data.get("lines", [])
+                        for line_content in new_lines:
+                            await self.process_log_line(line_content) # Reutilizar la lógica existente
+                        # print(f"[LogPoll] Recibidas {len(new_lines)} líneas. Última pos debug: {data.get('last_pos_debug')}")
+                    elif response.status == 401:
+                        print(f"❌ Error de autenticación con el API de logs: {response.status}. Verifica MC_LOG_API_TOKEN.")
+                        # Considera detener la tarea o notificar
+                        self.chat_bridge_enabled = False # Desactivar para evitar más errores
+                        print("🌉 Chat bridge desactivado debido a error de API.")
+                    else:
+                        print(f"❌ Error al obtener logs del API: {response.status} - {await response.text()}")
+        except aiohttp.ClientConnectorError as e:
+            print(f"❌ Error de conexión con el API de logs: {self.mc_log_api_url} - {e}")
+        except asyncio.TimeoutError:
+            print(f"❌ Timeout al conectar con el API de logs: {self.mc_log_api_url}")
         except Exception as e:
-            print(f"❌ Error en la detección automática de reinicio de log: {e}")
+            print(f"❌ Error inesperado en la tarea de polling de logs: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @remote_log_polling_task.before_loop
+    async def before_remote_log_polling(self):
+        await self.bot.wait_until_ready()
+        print("🤖 Tarea de polling de logs remotos lista y esperando.")
 
     def cog_unload(self):
         """Limpieza al descargar el cog"""
-        self.stop_log_monitoring()
-        # Resetear proxy al descargar el cog
+        # Detener la tarea de polling si está corriendo
+        if self.remote_log_polling_task.is_running():
+            self.remote_log_polling_task.cancel()
         self._reset_proxy()
 
     # --- Funciones de Check Personalizadas ---
