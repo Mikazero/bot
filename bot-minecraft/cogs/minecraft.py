@@ -74,6 +74,8 @@ class MinecraftCog(commands.Cog):
         # La tarea self._remote_log_polling_loop será definida por el decorador @tasks.loop
         # No es necesario definirla explícitamente aquí si el cog carga correctamente.
 
+        logger.info("[MinecraftCog] __init__ completado.")
+
     def _parse_fixie_socks_url(self):
         """Parsea la URL de Fixie Socks para extraer las credenciales del proxy"""
         if not self.fixie_socks_host:
@@ -578,40 +580,49 @@ class MinecraftCog(commands.Cog):
     ])
     async def minecraft_chat_bridge(self, interaction: Interaction, action: str, channel: discord.TextChannel = None):
         await interaction.response.defer(ephemeral=True)
+        logger.debug(f"[MinecraftCog] Comando /mcchat recibido. Acción: {action}, Canal: {channel}")
 
         if action == "enable":
             if not self.chat_channel_id:
-                await interaction.followup.send("❌ El canal de chat no está configurado. Usa la acción `set_channel` o define `MC_CHAT_CHANNEL_ID` en las variables de entorno y reinicia el bot.", ephemeral=True)
+                logger.warning("[MinecraftCog] /mcchat enable: chat_channel_id no configurado.")
+                await interaction.followup.send("❌ El canal de chat no está configurado...", ephemeral=True)
                 return
             if not self.mc_log_api_url or not self.mc_log_api_token:
-                await interaction.followup.send("❌ La URL o el token del API de logs no están configurados en las variables de entorno. No se puede activar el puente de chat.", ephemeral=True)
+                logger.warning("[MinecraftCog] /mcchat enable: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados.")
+                await interaction.followup.send("❌ La URL o el token del API de logs no están configurados...", ephemeral=True)
                 return
             
             target_channel = self.bot.get_channel(self.chat_channel_id)
             if not target_channel:
-                await interaction.followup.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id}). Verifica el ID y los permisos del bot.", ephemeral=True)
+                logger.warning(f"[MinecraftCog] /mcchat enable: No se pudo encontrar el target_channel con ID {self.chat_channel_id}")
+                await interaction.followup.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id})...", ephemeral=True)
                 return
 
+            logger.info(f"[MinecraftCog] /mcchat enable: Intentando activar puente. Tarea corriendo actualmente: {self._remote_log_polling_loop.is_running()}")
             if not self._remote_log_polling_loop.is_running():
                 try:
                     self.chat_bridge_active = True
+                    logger.info("[MinecraftCog] /mcchat enable: Estableciendo chat_bridge_active=True. Llamando a _remote_log_polling_loop.start().")
                     self._remote_log_polling_loop.start()
-                    logger.info(f"Tarea _remote_log_polling_loop iniciada por comando /mcchat enable.")
+                    logger.info(f"[MinecraftCog] /mcchat enable: _remote_log_polling_loop.start() llamado. Tarea corriendo ahora: {self._remote_log_polling_loop.is_running()}")
                     await interaction.followup.send(f"✅ Puente de chat activado. Mensajes del juego se enviarán a {target_channel.mention}.")
                 except RuntimeError as e:
-                    logger.error(f"Error al intentar iniciar _remote_log_polling_loop: {e}")
-                    await interaction.followup.send(f"⚠️ No se pudo iniciar la tarea de polling de logs en este momento: {e}. Intenta de nuevo en unos segundos.")
+                    logger.error(f"[MinecraftCog] /mcchat enable: Error al intentar iniciar _remote_log_polling_loop: {e}", exc_info=True)
+                    await interaction.followup.send(f"⚠️ No se pudo iniciar la tarea de polling de logs: {e}. Intenta de nuevo.", ephemeral=True)
             else:
-                self.chat_bridge_active = True 
+                self.chat_bridge_active = True # Asegurar que esté activo si la tarea ya corría
+                logger.info(f"[MinecraftCog] /mcchat enable: Puente de chat ya estaba activo o tarea ya corría. chat_bridge_active={self.chat_bridge_active}")
                 await interaction.followup.send(f"ℹ️ El puente de chat ya está activo y enviando mensajes a {target_channel.mention}.")
-
+        
         elif action == "disable":
+            logger.info(f"[MinecraftCog] /mcchat disable: Intentando desactivar puente. Tarea corriendo: {self._remote_log_polling_loop.is_running()}, chat_bridge_active: {self.chat_bridge_active}")
             self.chat_bridge_active = False 
             if self._remote_log_polling_loop.is_running():
                 self._remote_log_polling_loop.cancel()
-                logger.info(f"Tarea _remote_log_polling_loop detenida por comando /mcchat disable.")
+                logger.info("[MinecraftCog] /mcchat disable: Tarea _remote_log_polling_loop cancelada.")
                 await interaction.followup.send("✅ Puente de chat desactivado. El sondeo de logs se ha detenido.")
             else:
+                logger.info("[MinecraftCog] /mcchat disable: Puente de chat ya estaba inactivo o tarea no corría.")
                 await interaction.followup.send("ℹ️ El puente de chat ya estaba inactivo.")
 
         elif action == "status":
@@ -627,6 +638,7 @@ class MinecraftCog(commands.Cog):
             status_msg += f"- Canal de Discord: {target_channel.mention if target_channel else 'No configurado'}\n"
             status_msg += f"  (ID: {self.chat_channel_id if self.chat_channel_id else 'N/A'})\n"
             status_msg += f"- API de Logs Remotos: {'Configurada ✅' if api_configured else 'No configurada ❌ (revisa `MC_LOG_API_URL` y `MC_LOG_API_TOKEN`)'}"
+            logger.debug(f"[MinecraftCog] /mcchat status: bridge_active={self.chat_bridge_active}, task_running={self._remote_log_polling_loop.is_running()}, api_url_set={bool(self.mc_log_api_url)}, api_token_set={bool(self.mc_log_api_token)}, channel_id={self.chat_channel_id}")
             await interaction.followup.send(status_msg, ephemeral=True)
 
         elif action == "set_channel":
@@ -645,44 +657,54 @@ class MinecraftCog(commands.Cog):
     @commands.command(name="mcchat", help="Configura el chat bridge. Uso: m.mcchat <enable|disable|status|set_channel> [#canal]")
     async def text_minecraft_chat_bridge(self, ctx: commands.Context, action: str, channel: discord.TextChannel = None):
         action = action.lower()
+        logger.debug(f"[MinecraftCog] Comando m.mcchat recibido. Acción: {action}, Canal: {channel}")
 
         if action == "enable":
             if not self.chat_channel_id:
-                await ctx.send("❌ El canal de chat no está configurado. Usa `set_channel` o define `MC_CHAT_CHANNEL_ID` en las variables de entorno y reinicia el bot.")
+                logger.warning("[MinecraftCog] m.mcchat enable: chat_channel_id no configurado.")
+                await ctx.send("❌ El canal de chat no está configurado...")
                 return
             if not self.mc_log_api_url or not self.mc_log_api_token:
-                await ctx.send("❌ La URL o el token del API de logs no están configurados en las variables de entorno. No se puede activar el puente de chat.")
+                logger.warning("[MinecraftCog] m.mcchat enable: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados.")
+                await ctx.send("❌ La URL o el token del API de logs no están configurados...")
                 return
 
             target_channel = self.bot.get_channel(self.chat_channel_id)
             if not target_channel:
-                await ctx.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id}). Verifica el ID y los permisos del bot.")
+                logger.warning(f"[MinecraftCog] m.mcchat enable: No se pudo encontrar el target_channel con ID {self.chat_channel_id}")
+                await ctx.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id})...")
                 return
-
+            
+            logger.info(f"[MinecraftCog] m.mcchat enable: Intentando activar puente. Tarea corriendo actualmente: {self._remote_log_polling_loop.is_running()}")
             if not self._remote_log_polling_loop.is_running():
                 try:
                     if not self.aiohttp_session or self.aiohttp_session.closed:
+                        logger.info("[MinecraftCog] m.mcchat enable: Creando nueva sesión aiohttp para la tarea.")
                         self.aiohttp_session = aiohttp.ClientSession()
                     self.chat_bridge_active = True
+                    logger.info("[MinecraftCog] m.mcchat enable: Estableciendo chat_bridge_active=True. Llamando a _remote_log_polling_loop.start().")
                     self._remote_log_polling_loop.start()
-                    logger.info(f"Tarea _remote_log_polling_loop iniciada por comando m.mcchat enable.")
+                    logger.info(f"[MinecraftCog] m.mcchat enable: _remote_log_polling_loop.start() llamado. Tarea corriendo ahora: {self._remote_log_polling_loop.is_running()}")
                     await ctx.send(f"✅ Puente de chat activado. Mensajes a {target_channel.mention}.")
                 except RuntimeError as e:
-                    logger.error(f"Error al iniciar _remote_log_polling_loop (texto): {e}")
+                    logger.error(f"[MinecraftCog] m.mcchat enable: Error al iniciar _remote_log_polling_loop (texto): {e}", exc_info=True)
                     await ctx.send(f"⚠️ No se pudo iniciar la tarea: {e}.")
             else:
                 self.chat_bridge_active = True
+                logger.info(f"[MinecraftCog] m.mcchat enable: Puente de chat ya estaba activo o tarea ya corría. chat_bridge_active={self.chat_bridge_active}")
                 await ctx.send(f"ℹ️ El puente de chat ya está activo ({target_channel.mention}).")
 
         elif action == "disable":
+            logger.info(f"[MinecraftCog] m.mcchat disable: Intentando desactivar puente. Tarea corriendo: {self._remote_log_polling_loop.is_running()}, chat_bridge_active: {self.chat_bridge_active}")
             self.chat_bridge_active = False
             if self._remote_log_polling_loop.is_running():
                 self._remote_log_polling_loop.cancel()
-                logger.info(f"Tarea _remote_log_polling_loop detenida por comando m.mcchat disable.")
+                logger.info("[MinecraftCog] m.mcchat disable: Tarea _remote_log_polling_loop cancelada.")
                 await ctx.send("✅ Puente de chat desactivado.")
             else:
+                logger.info("[MinecraftCog] m.mcchat disable: Puente de chat ya estaba inactivo o tarea no corría.")
                 await ctx.send("ℹ️ El puente de chat ya está inactivo.")
-
+        
         elif action == "status":
             status_msg = "ℹ️ **Estado del Puente de Chat Minecraft (Texto)**:\n"
             target_channel = self.bot.get_channel(self.chat_channel_id) if self.chat_channel_id else None
@@ -694,6 +716,7 @@ class MinecraftCog(commands.Cog):
                 status_msg += "- Tarea de polling: Inactiva ❌ (API no configurada)\n"
             status_msg += f"- Canal Discord: {target_channel.mention if target_channel else 'No configurado'}\n"
             status_msg += f"- API Logs: {'Configurada ✅' if api_configured else 'No configurada ❌'}"
+            logger.debug(f"[MinecraftCog] m.mcchat status: bridge_active={self.chat_bridge_active}, task_running={self._remote_log_polling_loop.is_running()}, api_url_set={bool(self.mc_log_api_url)}, api_token_set={bool(self.mc_log_api_token)}, channel_id={self.chat_channel_id}")
             await ctx.send(status_msg)
 
         elif action == "set_channel":
@@ -825,43 +848,48 @@ class MinecraftCog(commands.Cog):
 
     @tasks.loop(seconds=5)
     async def _remote_log_polling_loop(self):
+        logger.debug(f"[MinecraftCog] Inicio de ciclo _remote_log_polling_loop. chat_bridge_active={self.chat_bridge_active}")
         if not self.chat_bridge_active:
+            logger.debug("[MinecraftCog] _remote_log_polling_loop: Saliendo porque chat_bridge_active es False.")
             return
 
         if not self.mc_log_api_url or not self.mc_log_api_token:
+            logger.warning("[MinecraftCog] _remote_log_polling_loop: Saliendo porque MC_LOG_API_URL o MC_LOG_API_TOKEN no están configurados.")
             return
 
+        logger.debug("[MinecraftCog] _remote_log_polling_loop: Verificando sesión aiohttp.")
         if not self.aiohttp_session or self.aiohttp_session.closed:
-            logger.warning("_remote_log_polling_loop: Sesión aiohttp no disponible o cerrada. Recreando...")
+            logger.warning("[MinecraftCog] _remote_log_polling_loop: Sesión aiohttp no disponible o cerrada. Recreando...")
             try:
                 self.aiohttp_session = aiohttp.ClientSession()
-                logger.info("Sesión aiohttp recreada en polling task.")
+                logger.info("[MinecraftCog] _remote_log_polling_loop: Sesión aiohttp recreada en polling task.")
             except Exception as e:
-                logger.error(f"No se pudo recrear la sesión aiohttp en polling task: {e}. Saltando ciclo.")
+                logger.error(f"[MinecraftCog] _remote_log_polling_loop: No se pudo recrear la sesión aiohttp: {e}. Saltando ciclo.", exc_info=True)
                 return
         
-        # Volver a la cabecera de autenticación y endpoint originales esperados por el API modificado
         headers = {
             "Authorization": f"Bearer {self.mc_log_api_token}", 
             "User-Agent": "DiscordBot-MinecraftCog/1.0"
         }
-        full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs" # REVERTIDO AQUÍ
+        full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs"
+        logger.info(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {full_url}")
 
         try:
             async with self.aiohttp_session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                logger.info(f"[MinecraftCog] _remote_log_polling_loop: Respuesta recibida del API: Status {response.status}")
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"Respuesta JSON del API de logs: {data}")
-                    # El API (después de modificarlo) devolverá {"new_lines": [...]} 
-                    new_lines = data.get("new_lines", []) # REVERTIDO AQUÍ de "lines" a "new_lines"
+                    logger.info(f"[MinecraftCog] Respuesta JSON del API de logs: {data}") 
+                    new_lines = data.get("new_lines", []) 
                     if new_lines:
+                        logger.info(f"[MinecraftCog] _remote_log_polling_loop: {len(new_lines)} nuevas líneas recibidas. Procesando...")
                         for item in new_lines: 
-                            # Asumimos que el API ahora envía solo la línea como string, 
-                            # o si envía un dict, ajustamos process_log_line o el API
                             if isinstance(item, str):
                                 await self.process_log_line(item)
-                            elif isinstance(item, dict): # Si el API aún manda dicts
+                            elif isinstance(item, dict): 
                                 await self.process_log_line(item.get("line"), item.get("timestamp"))
+                    else:
+                        logger.debug("[MinecraftCog] _remote_log_polling_loop: No hay nuevas líneas en la respuesta.")
                 elif response.status == 401:
                     logger.error(f"Error 401 (No Autorizado) con el API de logs ({full_url}). Verifica MC_LOG_API_TOKEN. Desactivando bridge.")
                     self.chat_bridge_active = False
@@ -885,10 +913,12 @@ class MinecraftCog(commands.Cog):
 
     @_remote_log_polling_loop.before_loop
     async def before_remote_log_polling(self):
+        logger.info("[MinecraftCog] before_remote_log_polling: Esperando que el bot esté listo.")
         await self.bot.wait_until_ready()
         if not self.aiohttp_session or self.aiohttp_session.closed:
+            logger.info("[MinecraftCog] before_remote_log_polling: Creando sesión aiohttp inicial.")
             self.aiohttp_session = aiohttp.ClientSession()
-        print("⛏️ Tarea de polling de logs lista. Se ejecutará si el puente de chat está activo.")
+        logger.info("⛏️ [MinecraftCog] Tarea de polling de logs lista y sesión aiohttp preparada. Se ejecutará si el puente de chat está activo.")
 
     def cog_unload(self):
         """Limpieza al descargar el cog"""
