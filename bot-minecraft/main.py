@@ -6,7 +6,7 @@ import logging
 
 # Configuración detallada de logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)-8s] %(name)-25s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
