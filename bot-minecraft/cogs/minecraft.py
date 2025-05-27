@@ -47,7 +47,7 @@ class MinecraftCog(commands.Cog):
             "hit the ground", "fell", # "fell" es genérico y cubrirá "fell from", "fell off", etc.
             "drowned", "suffocated", "died", "perished", "went up in flames",
             "burned", "froze to death", "starved to death", "tried to swim in lava",
-            "experienced kinetic energy", "withered", "blew up"
+            "experienced kinetic energy", "withered", "blew up", "blown up"
         ]
         death_regex_clauses = "|".join([re.escape(phrase) for phrase in self.death_core_phrases])
         death_pattern_str = rf"\\[\\d{{2}}:\\d{{2}}:\\d{{2}}\\] \\[Server thread/INFO\\]: (\\w+\\s+(?:{death_regex_clauses}).*)"
@@ -149,6 +149,16 @@ class MinecraftCog(commands.Cog):
             return
 
         # --- Intento de Patrón de Muerte ---
+        # Logs de depuración adicionales para el patrón de muerte
+        logger.critical(f"[PLP_DEATH_DEBUG] Para línea: {repr(line)}")
+        try:
+            logger.critical(f"[PLP_DEATH_DEBUG]   Patrón DEATH compilado: {self.log_patterns[3].pattern}")
+            logger.critical(f"[PLP_DEATH_DEBUG]   Lista de core phrases en uso: {self.death_core_phrases}")
+        except IndexError:
+            logger.critical("[PLP_DEATH_DEBUG]   Error: self.log_patterns[3] no existe (IndexError).")
+        except AttributeError:
+            logger.critical("[PLP_DEATH_DEBUG]   Error: self.log_patterns[3] no es un objeto regex compilado (AttributeError).")
+            
         logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón DEATH en línea: '{line[:100]}...'")
         death_match = self.log_patterns[3].search(line)
         if death_match:
