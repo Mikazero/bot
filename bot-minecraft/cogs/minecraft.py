@@ -70,7 +70,7 @@ class MinecraftCog(commands.Cog):
         log_identifier = f"{timestamp_str}-{line}" if timestamp_str else line
         if log_identifier in self.processed_log_timestamps:
             return
-        
+            
         self.processed_log_timestamps.add(log_identifier)
         if len(self.processed_log_timestamps) > 1000:
             self.processed_log_timestamps.pop()
@@ -87,7 +87,7 @@ class MinecraftCog(commands.Cog):
             )
             await channel.send(embed=embed)
             return
-
+        
         match = self.log_patterns[1].match(line)
         if match:
             player = match.groups()[1]
@@ -98,7 +98,7 @@ class MinecraftCog(commands.Cog):
             )
             await channel.send(embed=embed)
             return
-
+        
         match = self.log_patterns[2].match(line)
         if match:
             player = match.groups()[1]
@@ -131,7 +131,7 @@ class MinecraftCog(commands.Cog):
         except Exception as e:
             logger.error(f"[MinecraftCog] get_server_status: Error al obtener estado del servidor: {e}", exc_info=True)
             return None
-
+    
     async def execute_rcon_command(self, command):
         logger.debug(f"[MinecraftCog] execute_rcon_command: Intentando ejecutar '{command}'")
         if not self.rcon_password:
@@ -147,7 +147,7 @@ class MinecraftCog(commands.Cog):
                     return response
             
             response = await asyncio.to_thread(rcon_blocking_call)
-            return response
+                return response
         except Exception as e:
             logger.error(f"[MinecraftCog] execute_rcon_command: Error detallado ejecutando comando RCON '{command}':", exc_info=True)
             return f"❌ Error ejecutando comando: {str(e)}"
@@ -387,7 +387,7 @@ class MinecraftCog(commands.Cog):
     async def minecraft_chat_bridge(self, interaction: Interaction, action: str, channel: discord.TextChannel = None):
         await interaction.response.defer(ephemeral=True)
         logger.debug(f"[MinecraftCog] Comando /mcchat recibido. Acción: {action}, Canal: {channel}")
-
+        
         if action == "enable":
             if not self.chat_channel_id:
                 logger.warning("[MinecraftCog] /mcchat enable: chat_channel_id no configurado.")
@@ -446,7 +446,7 @@ class MinecraftCog(commands.Cog):
             status_msg += f"- API de Logs Remotos: {'Configurada ✅' if api_configured else 'No configurada ❌ (revisa `MC_LOG_API_URL` y `MC_LOG_API_TOKEN`)'}"
             logger.debug(f"[MinecraftCog] /mcchat status: bridge_active={self.chat_bridge_active}, task_running={self._remote_log_polling_loop.is_running()}, api_url_set={bool(self.mc_log_api_url)}, api_token_set={bool(self.mc_log_api_token)}, channel_id={self.chat_channel_id}")
             await interaction.followup.send(status_msg, ephemeral=True)
-
+        
         elif action == "set_channel":
             if channel:
                 self.chat_channel_id = channel.id
@@ -626,12 +626,12 @@ class MinecraftCog(commands.Cog):
                     await ctx_or_interaction.followup.send(message, ephemeral=True)
                 else:
                     await ctx_or_interaction.response.send_message(message, ephemeral=True)
-            else:
+        else:
                 await ctx_or_interaction.send(message, ephemeral=True)
 
     @tasks.loop(seconds=5)
     async def _remote_log_polling_loop(self):
-        logger.debug(f"[MinecraftCog] Inicio de ciclo _remote_log_polling_loop. chat_bridge_active={self.chat_bridge_active}")
+        logger.info(f"[MinecraftCog] Inicio de ciclo _remote_log_polling_loop. chat_bridge_active={self.chat_bridge_active}")
         if not self.chat_bridge_active:
             logger.debug("[MinecraftCog] _remote_log_polling_loop: Saliendo porque chat_bridge_active es False.")
             return
