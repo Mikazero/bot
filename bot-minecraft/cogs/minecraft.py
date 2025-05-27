@@ -717,18 +717,33 @@ class MinecraftCog(commands.Cog):
                             if line_to_process and test_line in line_to_process:
                                 logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                                 logger.critical(f"[DEBUG_REGEX] Detectada línea de prueba: '{line_to_process}'")
-                                logger.critical(f"[DEBUG_REGEX]   - Comparando con:           '{test_line}'")
-                                chat_pattern_debug = re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)')
-                                logger.critical(f"[DEBUG_REGEX]   - Usando patrón CHAT:       '{chat_pattern_debug.pattern}'")
-                                match_debug = chat_pattern_debug.search(line_to_process)
-                                if match_debug:
-                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA ENCONTRADA (DEBUG)!")
-                                    logger.critical(f"[DEBUG_REGEX]     - Grupo 1 (Player): '{match_debug.group(1)}'")
-                                    logger.critical(f"[DEBUG_REGEX]     - Grupo 2 (Message): '{match_debug.group(2)}'")
-                                else:
-                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (DEBUG)")
                                 
-                                # Prueba representando la línea como bytes para ver caracteres ocultos
+                                # Prueba 1: Usando el patrón precompilado del cog
+                                logger.critical(f"[DEBUG_REGEX] --- Prueba con self.log_patterns[0] ({self.log_patterns[0].pattern}) ---")
+                                match_cog_pattern = self.log_patterns[0].search(line_to_process)
+                                if match_cog_pattern:
+                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (self.log_patterns[0].search)!")
+                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_cog_pattern.group(1)}', G2: '{match_cog_pattern.group(2)}'")
+                                else:
+                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (self.log_patterns[0].search)")
+
+                                # Prueba 2: Recompilando con anclas ^ y $
+                                chat_pattern_anchored = re.compile(r'^\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\\[Not Secure\\] )?<(\\w+)> (.+)$)')
+                                logger.critical(f"[DEBUG_REGEX] --- Prueba con patrón anclado ({chat_pattern_anchored.pattern}) ---")
+                                match_anchored_search = chat_pattern_anchored.search(line_to_process)
+                                if match_anchored_search:
+                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (anclado .search)!")
+                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_anchored_search.group(1)}', G2: '{match_anchored_search.group(2)}'")
+                                else:
+                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (anclado .search)")
+                                
+                                match_anchored_match = chat_pattern_anchored.match(line_to_process)
+                                if match_anchored_match:
+                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (anclado .match)!")
+                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_anchored_match.group(1)}', G2: '{match_anchored_match.group(2)}'")
+                                else:
+                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (anclado .match)")
+
                                 logger.critical(f"[DEBUG_REGEX]   - Línea como bytes: {line_to_process.encode('utf-8', 'backslashreplace')}")
                                 logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                             # ---- FIN BLOQUE DE DEBUG ESPECÍFICO ----
