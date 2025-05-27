@@ -147,7 +147,7 @@ class MinecraftCog(commands.Cog):
                     return response
             
             response = await asyncio.to_thread(rcon_blocking_call)
-                return response
+            return response
         except Exception as e:
             logger.error(f"[MinecraftCog] execute_rcon_command: Error detallado ejecutando comando RCON '{command}':", exc_info=True)
             return f"❌ Error ejecutando comando: {str(e)}"
