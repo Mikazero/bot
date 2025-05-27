@@ -10,12 +10,10 @@ import json
 from datetime import datetime
 import aiohttp
 import re
-import socks
-import socket
-import logging # Añadir logging
-from typing import Union # <--- AÑADIR ESTA LÍNEA
+import logging
+from typing import Union
 
-logger = logging.getLogger(__name__) # Configurar un logger para el cog
+logger = logging.getLogger(__name__)
 
 class MinecraftCog(commands.Cog):
     def __init__(self, bot):
@@ -25,16 +23,10 @@ class MinecraftCog(commands.Cog):
         self.rcon_port = int(os.environ.get("MC_RCON_PORT", "25575"))
         self.rcon_password = os.environ.get("MC_RCON_PASSWORD", "")
         
-        # MC_CHAT_CHANNEL_ID debe estar configurado en Heroku
         self.chat_channel_id = int(os.environ.get("MC_CHAT_CHANNEL_ID", "0"))
         if not self.chat_channel_id:
-            logger.warning("MC_CHAT_CHANNEL_ID no está configurado. El puente de chat no funcionará correctamente hasta que se configure un canal.")
+            logger.warning("MC_CHAT_CHANNEL_ID no está configurado...")
         
-        # Configuración del proxy Fixie Socks
-        self.fixie_socks_host = os.environ.get("FIXIE_SOCKS_HOST")
-        self.proxy_config = self._parse_fixie_socks_url()
-        
-        # IDs para restricciones de acceso
         raw_guild_id = os.environ.get("MC_ALLOWED_GUILD_ID")
         raw_channel_id = os.environ.get("MC_ALLOWED_CHANNEL_ID")
         raw_user_id = os.environ.get("MC_ALLOWED_USER_ID")
@@ -48,17 +40,13 @@ class MinecraftCog(commands.Cog):
         logger.info(f"  - Canal permitido: {self.allowed_channel_id if self.allowed_channel_id else 'Cualquiera'}")
         logger.info(f"  - Usuario permitido: {self.allowed_user_id if self.allowed_user_id else 'Cualquiera'}")
 
-        # Patrones regex para el chat (ajustados para unificar)
         self.log_patterns = [
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)'), # Chat (Nuevo, maneja "[Not Secure] ")
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) joined the game'),  # Join
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) left the game'),  # Leave
-            # Podrías añadir más patrones aquí (muertes, logros, etc.)
-            # Ejemplo de patrón de muerte (genérico, puede necesitar ajustes)
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+ (?:was slain by|drowned|fell|etc\\.).*)') # Muerte
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)'),
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) joined the game'),
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) left the game'),
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+ (?:was slain by|drowned|fell|etc\\.).*)')
         ]
         
-        # Nuevas variables para el API de logs remotos
         self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
         self.mc_log_api_token = os.environ.get("MC_LOG_API_TOKEN")
         
@@ -67,102 +55,41 @@ class MinecraftCog(commands.Cog):
         else:
             logger.info(f"🔗 Configuración del API de logs: URL={self.mc_log_api_url}, Token={'*' * len(self.mc_log_api_token) if self.mc_log_api_token else 'No establecido'}")
 
-        self.aiohttp_session = None # Se inicializará en cog_load o before_loop
-        self.processed_log_timestamps = set() # Para evitar procesar la misma línea múltiples veces en la misma sesión del bot
-        self.chat_bridge_active = False # Estado del chat bridge
+        self.aiohttp_session = None
+        self.processed_log_timestamps = set()
+        self.chat_bridge_active = False
         
-        # La tarea self._remote_log_polling_loop será definida por el decorador @tasks.loop
-        # No es necesario definirla explícitamente aquí si el cog carga correctamente.
-
         logger.info("[MinecraftCog] __init__ completado.")
 
-    def _parse_fixie_socks_url(self):
-        """Parsea la URL de Fixie Socks para extraer las credenciales del proxy"""
-        if not self.fixie_socks_host:
-            return None
-        
-        try:
-            # Formato: user:password@host:port
-            match = re.match(r'([^:]+):([^@]+)@([^:]+):(\d+)', self.fixie_socks_host)
-            if match:
-                return {
-                    'username': match.group(1),
-                    'password': match.group(2),
-                    'host': match.group(3),
-                    'port': int(match.group(4))
-                }
-            else:
-                logger.error(f"❌ Formato de Fixie Socks URL no reconocido: {self.fixie_socks_host}")
-                return None
-        except Exception as e:
-            logger.error(f"❌ Error parseando Fixie Socks URL: {e}")
-            return None
-    
-    def _setup_proxy(self):
-        """Configura el proxy SOCKSv5 para las conexiones"""
-        if self.proxy_config:
-            socks.set_default_proxy(
-                socks.SOCKS5,
-                self.proxy_config['host'],
-                self.proxy_config['port'],
-                username=self.proxy_config['username'],
-                password=self.proxy_config['password']
-            )
-            socket.socket = socks.socksocket
-            logger.info(f"🌐 Proxy SOCKSv5 configurado: {self.proxy_config['host']}:{self.proxy_config['port']}")
-            return True
-        return False
-    
-    def _reset_proxy(self):
-        """Resetea la configuración del proxy"""
-        if self.proxy_config:
-            socket.socket = socket._realsocket if hasattr(socket, '_realsocket') else socket.socket
-            
     async def process_log_line(self, line: str, timestamp_str: str = None):
-        """Procesa una línea individual del log.
-        El timestamp_str es opcional, si el API lo provee por separado.
-        """
-        # Usar self.chat_channel_id en lugar de self.chat_channel_id_config
         channel = self.bot.get_channel(self.chat_channel_id)
         if not channel:
             logger.error(f"Error: Canal de chat con ID {self.chat_channel_id} no encontrado.")
             return
 
-        # Para evitar duplicados dentro de una misma ejecución del bot si el API enviara la misma línea varias veces
-        # (aunque el API actual no debería hacerlo si funciona como se espera)
         log_identifier = f"{timestamp_str}-{line}" if timestamp_str else line
         if log_identifier in self.processed_log_timestamps:
-            return # Ya procesada en esta sesión
+            return
         
-        # Añadir a procesados (podríamos limitar el tamaño de este set si es necesario)
         self.processed_log_timestamps.add(log_identifier)
-        if len(self.processed_log_timestamps) > 1000: # Limpiar el set periódicamente para evitar uso excesivo de memoria
+        if len(self.processed_log_timestamps) > 1000:
             self.processed_log_timestamps.pop()
 
-
-        # Normalizar tiempo si no viene en la línea (ej. si el API lo da por separado)
         current_time_for_embed = datetime.now()
 
-        # Chat de jugador
-        # Ajuste: El patrón original ya captura el tiempo del log de Minecraft.
-        # r'\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[Server thread/INFO\\]: <(\\w+)> (.+)'
         match = self.log_patterns[0].match(line)
         if match:
-            # log_time, player, message = match.groups() # log_time ya está en el formato HH:MM:SS
-            player, message = match.groups()[1], match.groups()[2] # El primer grupo es el timestamp
+            player, message = match.groups()[1], match.groups()[2]
             embed = discord.Embed(
                 description=f"💬 **{player}**: {message}",
                 color=discord.Color.blue(),
-                timestamp=current_time_for_embed # Usar tiempo actual para el embed
+                timestamp=current_time_for_embed
             )
             await channel.send(embed=embed)
             return
 
-        # Jugador se une
-        # r'\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[Server thread/INFO\\]: (\\w+) joined the game'
         match = self.log_patterns[1].match(line)
         if match:
-            # log_time, player = match.groups()
             player = match.groups()[1]
             embed = discord.Embed(
                 description=f"✅ **{player}** se unió al servidor.",
@@ -172,11 +99,8 @@ class MinecraftCog(commands.Cog):
             await channel.send(embed=embed)
             return
 
-        # Jugador se va
-        # r'\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[Server thread/INFO\\]: (\\w+) left the game'
         match = self.log_patterns[2].match(line)
         if match:
-            # log_time, player = match.groups()
             player = match.groups()[1]
             embed = discord.Embed(
                 description=f"❌ **{player}** salió del servidor.",
@@ -186,13 +110,8 @@ class MinecraftCog(commands.Cog):
             await channel.send(embed=embed)
             return
         
-        # Mensajes de muerte (ejemplo básico)
-        # r'\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[Server thread/INFO\\]: (\\w+ .*)\'
-        # Este patrón de muerte es muy genérico y puede necesitar ser más específico
-        # o tener varios patrones de muerte.
         match = self.log_patterns[3].match(line)
         if match:
-            # log_time, death_message = match.groups()
             death_message = match.groups()[1]
             embed = discord.Embed(
                 description=f"💀 {death_message}",
@@ -202,201 +121,98 @@ class MinecraftCog(commands.Cog):
             await channel.send(embed=embed)
             return
 
-        # Si no coincide con nada conocido, no lo enviamos para evitar spam.
-        # logger.info(f"Línea no procesada: {line}")
-
     async def get_server_status(self):
-        """Obtiene el estado del servidor de Minecraft"""
-        proxy_used = False
+        logger.debug(f"[MinecraftCog] get_server_status: Intentando obtener estado para {self.server_ip}:{self.server_port}")
         try:
-            # Configurar proxy si está disponible
-            proxy_used = self._setup_proxy()
-            
             server = JavaServer.lookup(f"{self.server_ip}:{self.server_port}")
             status = await asyncio.to_thread(server.status)
+            logger.debug(f"[MinecraftCog] get_server_status: Estado obtenido: {status.players.online if status else 'N/A'} jugadores.")
             return status
         except Exception as e:
-            print(f"Error al obtener estado del servidor: {e}")
+            logger.error(f"[MinecraftCog] get_server_status: Error al obtener estado del servidor: {e}", exc_info=True)
             return None
-        finally:
-            # Resetear proxy
-            if proxy_used:
-                self._reset_proxy()
-    
+
     async def execute_rcon_command(self, command):
-        """Ejecuta un comando RCON en el servidor"""
+        logger.debug(f"[MinecraftCog] execute_rcon_command: Intentando ejecutar '{command}'")
         if not self.rcon_password:
+            logger.warning("[MinecraftCog] execute_rcon_command: RCON no configurado (falta contraseña).")
             return "❌ RCON no configurado (falta contraseña)"
         
-        proxy_used = False
         try:
-            # Configurar proxy si está disponible
-            proxy_used = self._setup_proxy()
-            
-            # Función bloqueante para ejecutar en un hilo separado
             def rcon_blocking_call():
-                # MCRcon necesita ser instanciado dentro de la función que corre en el hilo
+                logger.debug(f"[MinecraftCog] rcon_blocking_call: Conectando a {self.server_ip}:{self.rcon_port} para comando '{command}'")
                 with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
-                    return mcr.command(command)
+                    response = mcr.command(command)
+                    logger.debug(f"[MinecraftCog] rcon_blocking_call: Comando '{command}' ejecutado, respuesta: '{response[:100]}...'")
+                    return response
             
             response = await asyncio.to_thread(rcon_blocking_call)
             return response
         except Exception as e:
-            # Imprimir el traceback completo para mejor depuración en el servidor
-            import traceback
-            print(f"❌ Error detallado ejecutando comando RCON '{command}':")
-            traceback.print_exc()
+            logger.error(f"[MinecraftCog] execute_rcon_command: Error detallado ejecutando comando RCON '{command}':", exc_info=True)
             return f"❌ Error ejecutando comando: {str(e)}"
-        finally:
-            # Resetear proxy
-            if proxy_used:
-                self._reset_proxy()
 
     @app_commands.command(name="mcstatus", description="Muestra el estado del servidor de Minecraft")
     async def minecraft_status(self, interaction: Interaction):
-        """Comando para ver el estado del servidor"""
         await interaction.response.defer()
-        
+        logger.debug("[MinecraftCog] /mcstatus: Comando recibido.")
         status = await self.get_server_status()
         
         if status is None:
-            embed = discord.Embed(
-                title="🔴 Servidor Offline",
-                description=f"No se pudo conectar al servidor `{self.server_ip}:{self.server_port}`",
-                color=discord.Color.red()
-            )
+            embed = discord.Embed(title="�� Servidor Offline", description=f"No se pudo conectar a `{self.server_ip}:{self.server_port}`", color=discord.Color.red())
         else:
-            # Crear embed con información del servidor
-            embed = discord.Embed(
-                title="🟢 Servidor Online",
-                description=f"**{self.server_ip}:{self.server_port}**",
-                color=discord.Color.green()
-            )
-            
-            embed.add_field(
-                name="👥 Jugadores",
-                value=f"{status.players.online}/{status.players.max}",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📊 Latencia",
-                value=f"{status.latency:.1f}ms",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="🎮 Versión",
-                value=status.version.name,
-                inline=True
-            )
-            
-            # Lista de jugadores online
-            if status.players.online > 0 and status.players.sample:
-                players_list = [player.name for player in status.players.sample]
-                if len(players_list) > 10:
-                    players_text = ", ".join(players_list[:10]) + f" y {len(players_list) - 10} más..."
-                else:
-                    players_text = ", ".join(players_list)
-                
-                embed.add_field(
-                    name="🎯 Jugadores Online",
-                    value=f"```{players_text}```",
-                    inline=False
-                )
-            
-            # Agregar información del proxy si está configurado
-            if self.proxy_config:
-                embed.add_field(
-                    name="🌐 Conexión",
-                    value="✅ A través de IP estática (Fixie Socks)",
-                    inline=True
-                )
-            
-            embed.timestamp = datetime.now()
-        
-        await interaction.followup.send(embed=embed)
-
-    @commands.command(name="mcstatus", help="Muestra el estado del servidor de Minecraft. Uso: m.mcstatus")
-    async def text_minecraft_status(self, ctx: commands.Context):
-        """Comando de texto para ver el estado del servidor"""
-        # Podrías enviar un mensaje de "cargando" aquí si lo deseas
-        # await ctx.send("Consultando estado del servidor...")
-        
-        status = await self.get_server_status() # get_server_status ya usa to_thread
-        
-        if status is None:
-            embed = discord.Embed(
-                title="🔴 Servidor Offline",
-                description=f"No se pudo conectar al servidor `{self.server_ip}:{self.server_port}`",
-                color=discord.Color.red()
-            )
-        else:
-            embed = discord.Embed(
-                title="🟢 Servidor Online",
-                description=f"**{self.server_ip}:{self.server_port}**",
-                color=discord.Color.green()
-            )
+            embed = discord.Embed(title="🟢 Servidor Online", description=f"**{self.server_ip}:{self.server_port}**", color=discord.Color.green())
             embed.add_field(name="👥 Jugadores", value=f"{status.players.online}/{status.players.max}", inline=True)
             embed.add_field(name="📊 Latencia", value=f"{status.latency:.1f}ms", inline=True)
             embed.add_field(name="🎮 Versión", value=status.version.name, inline=True)
             if status.players.online > 0 and status.players.sample:
                 players_list = [player.name for player in status.players.sample]
-                if len(players_list) > 10:
-                    players_text = ", ".join(players_list[:10]) + f" y {len(players_list) - 10} más..."
-                else:
-                    players_text = ", ".join(players_list)
+                players_text = ", ".join(players_list[:10]) + (f" y {len(players_list) - 10} más..." if len(players_list) > 10 else "")
                 embed.add_field(name="🎯 Jugadores Online", value=f"```{players_text}```", inline=False)
-            if self.proxy_config:
-                embed.add_field(name="🌐 Conexión", value="✅ A través de IP estática (Fixie Socks)", inline=True)
+            
             embed.timestamp = datetime.now()
         
+        logger.debug("[MinecraftCog] /mcstatus: Enviando respuesta.")
+        await interaction.followup.send(embed=embed)
+
+    @commands.command(name="mcstatus", help="Muestra el estado del servidor de Minecraft. Uso: m.mcstatus")
+    async def text_minecraft_status(self, ctx: commands.Context):
+        logger.debug("[MinecraftCog] m.mcstatus: Comando recibido.")
+        status = await self.get_server_status()
+        if status is None:
+            embed = discord.Embed(title="🔴 Servidor Offline", description=f"No se pudo conectar a `{self.server_ip}:{self.server_port}`",color=discord.Color.red())
+        else:
+            embed = discord.Embed(title="🟢 Servidor Online",description=f"**{self.server_ip}:{self.server_port}**",color=discord.Color.green())
+            embed.add_field(name="👥 Jugadores", value=f"{status.players.online}/{status.players.max}", inline=True)
+            embed.add_field(name="📊 Latencia", value=f"{status.latency:.1f}ms", inline=True)
+            embed.add_field(name="🎮 Versión", value=status.version.name, inline=True)
+            if status.players.online > 0 and status.players.sample:
+                players_list = [player.name for player in status.players.sample]
+                players_text = ", ".join(players_list[:10]) + (f" y {len(players_list) - 10} más..." if len(players_list) > 10 else "")
+                embed.add_field(name="🎯 Jugadores Online", value=f"```{players_text}```", inline=False)
+            embed.timestamp = datetime.now()
+        logger.debug("[MinecraftCog] m.mcstatus: Enviando respuesta.")
         await ctx.send(embed=embed)
 
     @app_commands.command(name="mccommand", description="Ejecuta un comando en el servidor de Minecraft")
     @app_commands.describe(command="El comando a ejecutar (sin el /)")
     async def minecraft_command(self, interaction: Interaction, command: str):
-        """Ejecuta un comando RCON en el servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden ejecutar comandos del servidor.", ephemeral=True)
             return
         
         await interaction.response.defer()
-        
-        # Ejecutar comando directamente con await
+        logger.debug(f"[MinecraftCog] /mccommand: Comando '{command}' recibido.")
         result = await self.execute_rcon_command(command)
-        
-        embed = discord.Embed(
-            title="🎮 Comando Ejecutado",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(
-            name="📝 Comando",
-            value=f"```/{command}```",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📤 Resultado",
-            value=f"```{result[:1000]}```",  # Limitar a 1000 caracteres
-            inline=False
-        )
-        
-        if self.proxy_config:
-            embed.add_field(
-                name="🌐 Conexión",
-                value="✅ A través de IP estática",
-                inline=True
-            )
-        
+        embed = discord.Embed(title="🎮 Comando Ejecutado", color=discord.Color.blue())
+        embed.add_field(name="📝 Comando", value=f"```/{command}```", inline=False)
+        embed.add_field(name="📤 Resultado", value=f"```{result[:1000]}```", inline=False)
         embed.timestamp = datetime.now()
-        
+        logger.debug(f"[MinecraftCog] /mccommand: Enviando respuesta para '{command}'.")
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="mcplayers", description="Lista todos los jugadores online")
     async def minecraft_players(self, interaction: Interaction):
-        """Muestra una lista detallada de jugadores online"""
         await interaction.response.defer()
         
         status = await self.get_server_status()
@@ -429,7 +245,6 @@ class MinecraftCog(commands.Cog):
 
     @commands.command(name="mcplayers", help="Lista todos los jugadores online. Uso: m.mcplayers")
     async def text_minecraft_players(self, ctx: commands.Context):
-        """Muestra una lista detallada de jugadores online (versión texto)"""
         status = await self.get_server_status()
         if status is None:
             embed = discord.Embed(title="❌ Error", description="No se pudo conectar al servidor", color=discord.Color.red())
@@ -457,7 +272,6 @@ class MinecraftCog(commands.Cog):
         app_commands.Choice(name="Desactivar", value="off")
     ])
     async def minecraft_whitelist(self, interaction: Interaction, action: str, player: str = None):
-        """Gestiona la whitelist del servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden gestionar la whitelist.", ephemeral=True)
             return
@@ -468,15 +282,12 @@ class MinecraftCog(commands.Cog):
             await interaction.followup.send("❌ Debes especificar un nombre de jugador para esta acción.")
             return
         
-        # Construir comando
-        if action == "list":
-            command = "whitelist list"
-        elif action in ["on", "off"]:
+        command = "whitelist list" if action == "list" else f"whitelist {action}"
+        if action in ["on", "off"]:
             command = f"whitelist {action}"
         else:
             command = f"whitelist {action} {player}"
         
-        # Ejecutar comando directamente con await
         result = await self.execute_rcon_command(command)
         
         embed = discord.Embed(
@@ -500,7 +311,6 @@ class MinecraftCog(commands.Cog):
 
     @commands.command(name="mcwhitelist", help="Gestiona la whitelist. Uso: m.mcwhitelist <add|remove|list|on|off> [jugador]")
     async def text_minecraft_whitelist(self, ctx: commands.Context, action: str, *, player: str = None):
-        """Gestiona la whitelist del servidor (versión texto)"""
         action = action.lower()
         valid_actions = ["add", "remove", "list", "on", "off"]
         if action not in valid_actions:
@@ -511,11 +321,10 @@ class MinecraftCog(commands.Cog):
             await ctx.send("❌ Debes especificar un nombre de jugador para esta acción (`add` o `remove`).")
             return
         
-        if action == "list":
-            command = "whitelist list"
-        elif action in ["on", "off"]:
+        command = "whitelist list" if action == "list" else f"whitelist {action}"
+        if action in ["on", "off"]:
             command = f"whitelist {action}"
-        else: # add o remove
+        else:
             command = f"whitelist {action} {player}"
         
         result = await self.execute_rcon_command(command)
@@ -530,7 +339,6 @@ class MinecraftCog(commands.Cog):
         reason="Razón de la expulsión (opcional)"
     )
     async def minecraft_kick(self, interaction: Interaction, player: str, reason: str = "Expulsado por un administrador"):
-        """Expulsa a un jugador del servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden expulsar jugadores.", ephemeral=True)
             return
@@ -538,7 +346,6 @@ class MinecraftCog(commands.Cog):
         await interaction.response.defer()
         
         command = f"kick {player} {reason}"
-        # Ejecutar comando directamente con await
         result = await self.execute_rcon_command(command)
         
         embed = discord.Embed(
@@ -554,7 +361,6 @@ class MinecraftCog(commands.Cog):
 
     @commands.command(name="mckick", help="Expulsa a un jugador. Uso: m.mckick <jugador> [razón]")
     async def text_minecraft_kick(self, ctx: commands.Context, player: str, *, reason: str = "Expulsado por un administrador"):
-        """Expulsa a un jugador del servidor (versión texto)"""
         if not player:
             await ctx.send("❌ Debes especificar el nombre del jugador a expulsar.")
             return
@@ -610,7 +416,7 @@ class MinecraftCog(commands.Cog):
                     logger.error(f"[MinecraftCog] /mcchat enable: Error al intentar iniciar _remote_log_polling_loop: {e}", exc_info=True)
                     await interaction.followup.send(f"⚠️ No se pudo iniciar la tarea de polling de logs: {e}. Intenta de nuevo.", ephemeral=True)
             else:
-                self.chat_bridge_active = True # Asegurar que esté activo si la tarea ya corría
+                self.chat_bridge_active = True
                 logger.info(f"[MinecraftCog] /mcchat enable: Puente de chat ya estaba activo o tarea ya corría. chat_bridge_active={self.chat_bridge_active}")
                 await interaction.followup.send(f"ℹ️ El puente de chat ya está activo y enviando mensajes a {target_channel.mention}.")
         
@@ -644,9 +450,6 @@ class MinecraftCog(commands.Cog):
         elif action == "set_channel":
             if channel:
                 self.chat_channel_id = channel.id
-                # Nota: Este cambio es solo en tiempo de ejecución.
-                # Para persistencia, se debe actualizar la variable de entorno MC_CHAT_CHANNEL_ID y reiniciar,
-                # o implementar un sistema de configuración persistente.
                 logger.info(f"Canal de chat para Minecraft bridge configurado a {channel.name} (ID: {channel.id}) mediante comando.")
                 await interaction.followup.send(f"✅ Canal para el puente de chat configurado a {channel.mention}. Este cambio es temporal (solo para esta sesión del bot).", ephemeral=True)
             else:
@@ -739,16 +542,13 @@ class MinecraftCog(commands.Cog):
 
         response = await self.execute_rcon_command(f"say {message}")
         
-        # MCRcon `say` command often returns empty on success or the message itself.
-        # If execute_rcon_command returns its specific error string, we show that.
         if response is not None and response.startswith("❌ Error ejecutando comando:"):
             logger.warning(f"Error de RCON al intentar enviar '/say {message}': {response}")
             await interaction.followup.send(f"⚠️ Error al enviar mensaje al servidor: ```{response}```", ephemeral=True)
-        elif response is None or response == "" or message in response: # Check for common success indicators
+        elif response is None or response == "" or message in response:
             logger.info(f"Mensaje '/say {message}' enviado a Minecraft vía RCON. Respuesta: '{response}'")
             await interaction.followup.send(f"✅ Mensaje enviado al servidor: `{message}`")
         else:
-            # Unexpected response, show it for diagnostics
             logger.info(f"Respuesta inesperada de RCON para '/say {message}': '{response}'")
             await interaction.followup.send(f"ℹ️ Respuesta del servidor: ```{response}```", ephemeral=True)
 
@@ -763,7 +563,7 @@ class MinecraftCog(commands.Cog):
         if response is not None and response.startswith("❌ Error ejecutando comando:"):
             logger.warning(f"Error de RCON al intentar enviar '/say {message}' (comando de texto): {response}")
             await ctx.send(f"⚠️ Error al enviar mensaje al servidor: ```{response}```")
-        elif response is None or response == "" or message in response: # Check for common success indicators
+        elif response is None or response == "" or message in response:
             logger.info(f"Mensaje '/say {message}' enviado a Minecraft vía RCON (comando de texto). Respuesta: '{response}'")
             await ctx.send(f"✅ Mensaje enviado al servidor: `{message}`")
         else:
@@ -771,28 +571,24 @@ class MinecraftCog(commands.Cog):
             await ctx.send(f"ℹ️ Respuesta del servidor: ```{response}```")
             
     def cog_unload(self):
-        logger.info("Descargando MinecraftCog...")
-        # Es importante verificar si el atributo existe antes de intentar usarlo,
-        # especialmente si la carga del cog pudo haber fallado.
+        logger.info("[MinecraftCog] Descargando MinecraftCog...")
         if hasattr(self, '_remote_log_polling_loop') and self._remote_log_polling_loop.is_running():
             self._remote_log_polling_loop.cancel()
-            logger.info("Tarea de polling de logs remotos cancelada.")
+            logger.info("[MinecraftCog] Tarea de polling de logs remotos cancelada.")
         
         if hasattr(self, 'aiohttp_session') and self.aiohttp_session and not self.aiohttp_session.closed:
             try:
-                # En un cog_unload síncrono, no podemos hacer 'await'.
-                # Creamos una tarea para que se ejecute en el loop.
                 asyncio.create_task(self.aiohttp_session.close())
-                logger.info("Cierre de sesión aiohttp programado.")
+                logger.info("[MinecraftCog] Cierre de sesión aiohttp programado.")
             except Exception as e:
-                logger.error(f"Error al programar cierre de sesión aiohttp: {e}")
+                logger.error(f"[MinecraftCog] Error al programar cierre de sesión aiohttp: {e}", exc_info=True)
         else:
-            logger.info("No se encontró sesión aiohttp activa para cerrar o ya estaba cerrada.")
-        logger.info("MinecraftCog descargado.")
+            logger.info("[MinecraftCog] No se encontró sesión aiohttp activa para cerrar o ya estaba cerrada.")
+        
+        logger.info("[MinecraftCog] MinecraftCog descargado.")
 
-    # --- Funciones de Check Personalizadas ---
     def is_allowed_guild(self, ctx_or_interaction) -> bool:
-        if not self.allowed_guild_id: return True # Si no está configurado, permitir todos
+        if not self.allowed_guild_id: return True
         guild_id = ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id
         return guild_id == self.allowed_guild_id
 
@@ -806,39 +602,26 @@ class MinecraftCog(commands.Cog):
         user_id = ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id
         return user_id == self.allowed_user_id
 
-    # --- Check Combinado para aplicar a comandos ---
     async def combined_access_check(self, ctx_or_interaction) -> bool:
         if not self.is_allowed_guild(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: Guild ID {ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id} no permitido.")
             raise commands.CheckFailure("Este comando no está permitido en este servidor.")
         if not self.is_allowed_channel(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: Channel ID {ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id} no permitido.")
             raise commands.CheckFailure("Este comando no está permitido en este canal.")
         if not self.is_allowed_user(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: User ID {ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id} no permitido.")
             raise commands.CheckFailure("No tienes permiso para usar este comando.")
         return True
 
     async def cog_check(self, ctx_or_interaction: Union[Interaction, commands.Context]):
-        # El argumento puede ser commands.Context o discord.Interaction
-        # Necesitamos manejar ambos casos para obtener los IDs relevantes
-        if isinstance(ctx_or_interaction, commands.Context): # Para comandos de texto
+        if isinstance(ctx_or_interaction, commands.Context):
             return await self.combined_access_check(ctx_or_interaction)
-        # Para interacciones (app_commands), discord.py maneja los checks de forma nativa
-        # si se usa @app_commands.check decorator.
-        # Este cog_check unificado es un poco más complejo para app_commands.
-        # Si es una Interaction, el check ya se aplicó o es manejado por el decorador del comando.
-        # Para mantener la lógica de combined_access_check para interacciones desde aquí:
-        elif isinstance(ctx_or_interaction, Interaction): # Para comandos de aplicación
-             return await self.combined_access_check(ctx_or_interaction)
+        elif isinstance(ctx_or_interaction, Interaction):
+            return await self.combined_access_check(ctx_or_interaction)
         return False
 
     async def cog_command_error(self, ctx_or_interaction: Union[Interaction, commands.Context], error):
-        # ctx_or_interaction puede ser Context o Interaction
         if isinstance(error, commands.CheckFailure):
             message = str(error) if str(error) else "No cumples con los requisitos para usar este comando aquí."
-            if isinstance(ctx_or_interaction, Interaction): # <--- CAMBIAR AQUÍ
-                # Si la interacción ya fue respondida (defer), usar followup
+            if isinstance(ctx_or_interaction, Interaction):
                 if ctx_or_interaction.response.is_done():
                     await ctx_or_interaction.followup.send(message, ephemeral=True)
                 else:
@@ -920,17 +703,7 @@ class MinecraftCog(commands.Cog):
             self.aiohttp_session = aiohttp.ClientSession()
         logger.info("⛏️ [MinecraftCog] Tarea de polling de logs lista y sesión aiohttp preparada. Se ejecutará si el puente de chat está activo.")
 
-    def cog_unload(self):
-        """Limpieza al descargar el cog"""
-        # Detener la tarea de polling si está corriendo
-        if self._remote_log_polling_loop.is_running():
-            self._remote_log_polling_loop.cancel()
-        self._reset_proxy()
-
-    # ... existing code ...
-
 async def setup(bot):
     cog = MinecraftCog(bot)
     await bot.add_cog(cog)
-    # Ya no se llama a cog_load aquí, discord.py se encarga de ello.
     logger.info("MinecraftCog añadido al bot y setup completado. cog_load será llamado por discord.py.")
