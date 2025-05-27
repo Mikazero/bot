@@ -42,8 +42,8 @@ class MinecraftCog(commands.Cog):
 
         self.log_patterns = [
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\\[Not Secure\\] )?<(\\w+)> (.+)'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\\w+) joined the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\\w+) left the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) joined the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) left the game'),
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+ .*)')
         ]
         
