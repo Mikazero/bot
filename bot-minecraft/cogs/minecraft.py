@@ -41,10 +41,10 @@ class MinecraftCog(commands.Cog):
         logger.info(f"  - Usuario permitido: {self.allowed_user_id if self.allowed_user_id else 'Cualquiera'}")
 
         self.log_patterns = [
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) joined the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) left the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+ (?:was slain by|drowned|fell|etc\.).*)')
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\\[Not Secure\\] )?<(\\w+)> (.+)'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\\w+) joined the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\\w+) left the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+ .*)')
         ]
         
         self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
