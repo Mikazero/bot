@@ -829,68 +829,58 @@ class MinecraftCog(commands.Cog):
             return
 
         if not self.mc_log_api_url or not self.mc_log_api_token:
-            # print("Polling de logs no configurado (URL o Token faltan).")
-            # Podríamos detener la tarea si falta configuración crítica y notificar.
-            # self.chat_bridge_active = False
-            # self.remote_log_polling_task.stop()
-            # print("🚫 Polling de logs detenido por falta de configuración.")
-            # channel = self.bot.get_channel(self.chat_channel_id)
-            # if channel:
-            #     await channel.send("🚫 El bridge de chat no está configurado correctamente (URL o Token del API de logs faltan). La tarea de polling ha sido detenida.")
             return
 
         if not self.aiohttp_session or self.aiohttp_session.closed:
-            print("⚠️ Sesión aiohttp no disponible o cerrada. Recreando...")
-            self.aiohttp_session = aiohttp.ClientSession()
-            if not self.aiohttp_session: # Aún no se pudo crear
-                print("❌ No se pudo recrear la sesión aiohttp. Saltando este ciclo de polling.")
+            logger.warning("_remote_log_polling_loop: Sesión aiohttp no disponible o cerrada. Recreando...")
+            try:
+                self.aiohttp_session = aiohttp.ClientSession()
+                logger.info("Sesión aiohttp recreada en polling task.")
+            except Exception as e:
+                logger.error(f"No se pudo recrear la sesión aiohttp en polling task: {e}. Saltando ciclo.")
                 return
-
-
-        headers = {"Authorization": f"Bearer {self.mc_log_api_token}"}
-        full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs" # Asegurar que la URL esté bien formada
+        
+        # Volver a la cabecera de autenticación y endpoint originales esperados por el API modificado
+        headers = {
+            "Authorization": f"Bearer {self.mc_log_api_token}", 
+            "User-Agent": "DiscordBot-MinecraftCog/1.0"
+        }
+        full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs" # REVERTIDO AQUÍ
 
         try:
-            # print(f"DEBUG: Polling a {full_url} con token {self.mc_log_api_token[:5]}...")
-            async with self.aiohttp_session.get(full_url, headers=headers, timeout=10) as response:
+            async with self.aiohttp_session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 200:
-                    data = await response.json() # Esperamos que el API devuelva JSON como {"new_lines": [...]}
-                    new_lines = data.get("new_lines", [])
+                    data = await response.json()
+                    # El API (después de modificarlo) devolverá {"new_lines": [...]} 
+                    new_lines = data.get("new_lines", []) # REVERTIDO AQUÍ de "lines" a "new_lines"
                     if new_lines:
-                        print(f"📰 Recibidas {len(new_lines)} nuevas líneas del API de logs.")
-                        for line in new_lines:
-                            await self.process_log_line(line) # Asumimos que 'line' es una cadena
-                    # else:
-                        # print("DEBUG: No hay nuevas líneas.")
+                        for item in new_lines: 
+                            # Asumimos que el API ahora envía solo la línea como string, 
+                            # o si envía un dict, ajustamos process_log_line o el API
+                            if isinstance(item, str):
+                                await self.process_log_line(item)
+                            elif isinstance(item, dict): # Si el API aún manda dicts
+                                await self.process_log_line(item.get("line"), item.get("timestamp"))
                 elif response.status == 401:
-                    print("❌ Error de autorización (401) con el API de logs. Verifica el MC_LOG_API_TOKEN.")
-                    # Considera detener el bridge o notificar
-                    self.chat_bridge_active = False 
-                    channel = self.bot.get_channel(self.chat_channel_id)
-                    if channel:
-                        await channel.send("🚫 Error de autorización con el API de logs. El token podría ser incorrecto. El bridge de chat ha sido desactivado.")
-                elif response.status == 403: # El API devuelve 403 si el token está presente pero es inválido
-                    print("❌ Error de autorización (403 - Token inválido) con el API de logs. Verifica el MC_LOG_API_TOKEN.")
+                    logger.error(f"Error 401 (No Autorizado) con el API de logs ({full_url}). Verifica MC_LOG_API_TOKEN. Desactivando bridge.")
                     self.chat_bridge_active = False
-                    channel = self.bot.get_channel(self.chat_channel_id)
-                    if channel:
-                        await channel.send("🚫 Token del API de logs inválido. El bridge de chat ha sido desactivado.")
+                elif response.status == 403:
+                    logger.error(f"Error 403 (Prohibido) con el API de logs ({full_url}). Token inválido o sin permisos. Desactivando bridge.")
+                    self.chat_bridge_active = False
+                elif response.status == 404:
+                    logger.error(f"Error 404 (No Encontrado) con el API de logs: {full_url}. Verifica el endpoint en el API y en el bot.")
                 else:
                     error_text = await response.text()
-                    print(f"❌ Error al contactar el API de logs: {response.status} - {error_text}")
+                    logger.error(f"Error al contactar el API de logs ({full_url}): {response.status} - {error_text[:200]}")
         except aiohttp.ClientConnectorError as e:
-            print(f"❌ Error de conexión al API de logs: {e}. ¿Está el servidor API ({self.mc_log_api_url}) en línea y accesible?")
-        except aiohttp.ClientResponseError as e: # Errores HTTP que no sean 200
-            print(f"❌ Error de respuesta del API de logs: {e.status} - {e.message}")
+            logger.error(f"Error de conexión al API de logs: {e}. URL: {full_url}")
         except asyncio.TimeoutError:
-            print(f"⌛ Timeout al conectar con el API de logs en {full_url}.")
+            logger.warning(f"Timeout al conectar con el API de logs en {full_url}.")
         except json.JSONDecodeError:
             raw_text = await response.text()
-            print(f"❌ Error al decodificar JSON del API de logs. Respuesta recibida: {raw_text[:200]}")
+            logger.error(f"Error al decodificar JSON del API de logs ({full_url}). Respuesta: {raw_text[:200]}")
         except Exception as e:
-            print(f"🚨 Excepción inesperada en remote_log_polling_task: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Excepción inesperada en _remote_log_polling_loop: {e.__class__.__name__} - {e}", exc_info=True)
 
     @_remote_log_polling_loop.before_loop
     async def before_remote_log_polling(self):
