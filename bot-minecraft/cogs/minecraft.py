@@ -41,10 +41,10 @@ class MinecraftCog(commands.Cog):
         logger.info(f"  - Usuario permitido: {self.allowed_user_id if self.allowed_user_id else 'Cualquiera'}")
 
         self.log_patterns = [
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)'),
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) joined the game'),
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) left the game'),
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+ (?:was slain by|drowned|fell|etc\\.).*)')
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) joined the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) left the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+ (?:was slain by|drowned|fell|etc\.).*)')
         ]
         
         self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
@@ -729,7 +729,7 @@ class MinecraftCog(commands.Cog):
                                     logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (self.log_patterns[0].search)")
 
                                 # Prueba 2: Recompilando con anclas ^ y $
-                                chat_pattern_anchored = re.compile(r'^\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)$')
+                                chat_pattern_anchored = re.compile(r'^\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)$')
                                 logger.critical(f"[DEBUG_REGEX] --- Prueba con patrón anclado ({chat_pattern_anchored.pattern}) ---")
                                 match_anchored_search = chat_pattern_anchored.search(line_to_process)
                                 if match_anchored_search:
