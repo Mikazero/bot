@@ -713,7 +713,7 @@ class MinecraftCog(commands.Cog):
                                 timestamp_for_line = item.get("timestamp")
 
                             # ---- BLOQUE DE DEBUG ESPECÍFICO ----
-                            test_line = "[07:00:49] [Server thread/INFO]: [Not Secure] <Stalker_w> hola"
+                            test_line = "<Stalker_w> hola" 
                             if line_to_process and test_line in line_to_process:
                                 logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                                 logger.critical(f"[DEBUG_REGEX] Detectada línea de prueba: '{line_to_process}'")
