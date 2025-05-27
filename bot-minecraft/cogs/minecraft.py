@@ -704,10 +704,37 @@ class MinecraftCog(commands.Cog):
                     if new_lines:
                         logger.info(f"[MinecraftCog] _remote_log_polling_loop: {len(new_lines)} nuevas líneas recibidas. Procesando...")
                         for item in new_lines: 
+                            line_to_process = None
+                            timestamp_for_line = None
                             if isinstance(item, str):
-                                await self.process_log_line(item)
+                                line_to_process = item
                             elif isinstance(item, dict): 
-                                await self.process_log_line(item.get("line"), item.get("timestamp"))
+                                line_to_process = item.get("line")
+                                timestamp_for_line = item.get("timestamp")
+
+                            # ---- BLOQUE DE DEBUG ESPECÍFICO ----
+                            test_line = "[07:00:49] [Server thread/INFO]: [Not Secure] <Stalker_w> hola"
+                            if line_to_process and test_line in line_to_process:
+                                logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                                logger.critical(f"[DEBUG_REGEX] Detectada línea de prueba: '{line_to_process}'")
+                                logger.critical(f"[DEBUG_REGEX]   - Comparando con:           '{test_line}'")
+                                chat_pattern_debug = re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)')
+                                logger.critical(f"[DEBUG_REGEX]   - Usando patrón CHAT:       '{chat_pattern_debug.pattern}'")
+                                match_debug = chat_pattern_debug.search(line_to_process)
+                                if match_debug:
+                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA ENCONTRADA (DEBUG)!")
+                                    logger.critical(f"[DEBUG_REGEX]     - Grupo 1 (Player): '{match_debug.group(1)}'")
+                                    logger.critical(f"[DEBUG_REGEX]     - Grupo 2 (Message): '{match_debug.group(2)}'")
+                                else:
+                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (DEBUG)")
+                                
+                                # Prueba representando la línea como bytes para ver caracteres ocultos
+                                logger.critical(f"[DEBUG_REGEX]   - Línea como bytes: {line_to_process.encode('utf-8', 'backslashreplace')}")
+                                logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                            # ---- FIN BLOQUE DE DEBUG ESPECÍFICO ----
+
+                            if line_to_process:
+                                await self.process_log_line(line_to_process, timestamp_for_line)
                     else:
                         logger.debug("[MinecraftCog] _remote_log_polling_loop: No hay nuevas líneas en la respuesta.")
                 elif response.status == 401:
