@@ -717,6 +717,7 @@ class MinecraftCog(commands.Cog):
                             if line_to_process and test_line in line_to_process:
                                 logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                                 logger.critical(f"[DEBUG_REGEX] Detectada línea de prueba: '{line_to_process}'")
+                                logger.critical(f"[DEBUG_REGEX]   - repr(line_to_process): {repr(line_to_process)}")
                                 
                                 # Prueba 1: Usando el patrón precompilado del cog
                                 logger.critical(f"[DEBUG_REGEX] --- Prueba con self.log_patterns[0] ({self.log_patterns[0].pattern}) ---")
@@ -743,6 +744,15 @@ class MinecraftCog(commands.Cog):
                                     logger.critical(f"[DEBUG_REGEX]     - G1: '{match_anchored_match.group(1)}', G2: '{match_anchored_match.group(2)}'")
                                 else:
                                     logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (anclado .match)")
+
+                                # Prueba 3: Prueba de subcadena simple
+                                simple_substring_pattern = re.compile(re.escape("<Stalker_w> hola"))
+                                logger.critical(f"[DEBUG_REGEX] --- Prueba con subcadena simple ({simple_substring_pattern.pattern}) ---")
+                                match_simple_substring = simple_substring_pattern.search(line_to_process)
+                                if match_simple_substring:
+                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (subcadena simple .search)!")
+                                else:
+                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (subcadena simple .search)")
 
                                 logger.critical(f"[DEBUG_REGEX]   - Línea como bytes: {line_to_process.encode('utf-8', 'backslashreplace')}")
                                 logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
