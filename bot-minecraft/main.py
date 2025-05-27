@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
+import logging
 
 
 intents = discord.Intents.default()
@@ -24,24 +25,33 @@ async def on_error(event, *args, **kwargs):
 # --------- SETUP PARA COMANDOS SLASH ----------
 @bot.event
 async def setup_hook():
-    print("[MinecraftBot] Iniciando setup_hook...")
+    logging.info("Intentando cargar la extensión 'cogs.minecraft'...")
     try:
-        print("[MinecraftBot] Intentando cargar cogs.minecraft...")
         await bot.load_extension('cogs.minecraft')
-        print("[MinecraftBot] cogs.minecraft cargado exitosamente.")
+        logging.info("Extensión 'cogs.minecraft' cargada exitosamente.")
     except Exception as e:
-        print(f"[MinecraftBot] Error al cargar cogs.minecraft: {e}")
-        # Aquí podrías querer propagar el error o manejarlo de otra forma si es crítico
-        # return # Descomentar si quieres detener la sincronización en caso de error de carga de cog
+        logging.error(f"Error al cargar la extensión 'cogs.minecraft': {e}", exc_info=True)
 
+    logging.info("Sincronizando comandos...")
     try:
-        print("[MinecraftBot] Intentando sincronizar comandos de aplicación...")
-        synced = await bot.tree.sync()
-        print(f"[MinecraftBot] Sincronizados {len(synced)} comandos de aplicación (Minecraft).")
-        if not synced:
-            print("[MinecraftBot] ADVERTENCIA: No se sincronizó ningún comando. Revisa el cog y los comandos definidos.")
+        # Sincronizar comandos globales
+        synced_commands = await bot.tree.sync()
+        if synced_commands:
+            logging.info(f"{len(synced_commands)} comandos globales sincronizados: {[command.name for command in synced_commands]}")
+        else:
+            logging.warning("No se sincronizaron comandos globales.")
+
+        # Sincronizar comandos para guilds específicos si es necesario (ejemplo)
+        # for guild_id in self.guild_ids: # Asegúrate de tener self.guild_ids definido si usas esto
+        #     guild = discord.Object(id=guild_id)
+        #     guild_synced_commands = await self.tree.sync(guild=guild)
+        #     if guild_synced_commands:
+        #         logging.info(f"{len(guild_synced_commands)} comandos sincronizados para guild {guild_id}: {[command.name for command in guild_synced_commands]}")
+        #     else:
+        #         logging.warning(f"No se sincronizaron comandos para guild {guild_id}.")
+
     except Exception as e:
-        print(f"[MinecraftBot] Error al sincronizar comandos de aplicación (Minecraft): {e}")
+        logging.error(f"Error al sincronizar comandos: {e}", exc_info=True)
 
 # --------- ARRANQUE DEL BOT ----------
 if __name__ == '__main__':
