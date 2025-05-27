@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+from discord import Interaction
 import asyncio
 import os
 from mcstatus import JavaServer
@@ -67,9 +68,10 @@ class MinecraftCog(commands.Cog):
 
         self.aiohttp_session = None # Se inicializará en cog_load o before_loop
         self.processed_log_timestamps = set() # Para evitar procesar la misma línea múltiples veces en la misma sesión del bot
+        self.chat_bridge_active = False # Estado del chat bridge
         
-        # La tarea de polling se inicia/detiene con comandos ahora, o automáticamente si se desea
-        # self.remote_log_polling_task.start()
+        # La tarea self._remote_log_polling_loop será definida por el decorador @tasks.loop
+        # No es necesario definirla explícitamente aquí si el cog carga correctamente.
 
     def _parse_fixie_socks_url(self):
         """Parsea la URL de Fixie Socks para extraer las credenciales del proxy"""
@@ -248,7 +250,7 @@ class MinecraftCog(commands.Cog):
                 self._reset_proxy()
 
     @app_commands.command(name="mcstatus", description="Muestra el estado del servidor de Minecraft")
-    async def minecraft_status(self, interaction: discord.Interaction):
+    async def minecraft_status(self, interaction: Interaction):
         """Comando para ver el estado del servidor"""
         await interaction.response.defer()
         
@@ -350,7 +352,7 @@ class MinecraftCog(commands.Cog):
 
     @app_commands.command(name="mccommand", description="Ejecuta un comando en el servidor de Minecraft")
     @app_commands.describe(command="El comando a ejecutar (sin el /)")
-    async def minecraft_command(self, interaction: discord.Interaction, command: str):
+    async def minecraft_command(self, interaction: Interaction, command: str):
         """Ejecuta un comando RCON en el servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden ejecutar comandos del servidor.", ephemeral=True)
@@ -390,7 +392,7 @@ class MinecraftCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="mcplayers", description="Lista todos los jugadores online")
-    async def minecraft_players(self, interaction: discord.Interaction):
+    async def minecraft_players(self, interaction: Interaction):
         """Muestra una lista detallada de jugadores online"""
         await interaction.response.defer()
         
@@ -451,7 +453,7 @@ class MinecraftCog(commands.Cog):
         app_commands.Choice(name="Activar", value="on"),
         app_commands.Choice(name="Desactivar", value="off")
     ])
-    async def minecraft_whitelist(self, interaction: discord.Interaction, action: str, player: str = None):
+    async def minecraft_whitelist(self, interaction: Interaction, action: str, player: str = None):
         """Gestiona la whitelist del servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden gestionar la whitelist.", ephemeral=True)
@@ -524,7 +526,7 @@ class MinecraftCog(commands.Cog):
         player="Nombre del jugador a expulsar",
         reason="Razón de la expulsión (opcional)"
     )
-    async def minecraft_kick(self, interaction: discord.Interaction, player: str, reason: str = "Expulsado por un administrador"):
+    async def minecraft_kick(self, interaction: Interaction, player: str, reason: str = "Expulsado por un administrador"):
         """Expulsa a un jugador del servidor"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Solo los administradores pueden expulsar jugadores.", ephemeral=True)
@@ -571,10 +573,10 @@ class MinecraftCog(commands.Cog):
         app_commands.Choice(name="Activar", value="enable"),
         app_commands.Choice(name="Desactivar", value="disable"),
         app_commands.Choice(name="Estado", value="status"),
-        app_commands.Choice(name="Configurar Canal (runtime)", value="set_channel") # Nota: el canal configurado por env var tiene precedencia al reiniciar.
+        app_commands.Choice(name="Configurar Canal", value="set_channel")
     ])
-    async def minecraft_chat_bridge(self, interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
-        await interaction.response.defer()
+    async def minecraft_chat_bridge(self, interaction: Interaction, action: str, channel: discord.TextChannel = None):
+        await interaction.response.defer(ephemeral=True)
 
         if action == "enable":
             if not self.chat_channel_id:
@@ -589,37 +591,41 @@ class MinecraftCog(commands.Cog):
                 await interaction.followup.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id}). Verifica el ID y los permisos del bot.", ephemeral=True)
                 return
 
-            if not self.remote_log_polling_task.is_running():
+            if not self._remote_log_polling_loop.is_running():
                 try:
-                    self.remote_log_polling_task.start()
-                    logger.info(f"Tarea remote_log_polling_task iniciada por comando /mcchat enable.")
+                    self.chat_bridge_active = True
+                    self._remote_log_polling_loop.start()
+                    logger.info(f"Tarea _remote_log_polling_loop iniciada por comando /mcchat enable.")
                     await interaction.followup.send(f"✅ Puente de chat activado. Mensajes del juego se enviarán a {target_channel.mention}.")
                 except RuntimeError as e:
-                    logger.error(f"Error al intentar iniciar remote_log_polling_task: {e}")
-                    await interaction.followup.send(f"⚠️ No se pudo iniciar la tarea de polling de logs: {e}", ephemeral=True)
+                    logger.error(f"Error al intentar iniciar _remote_log_polling_loop: {e}")
+                    await interaction.followup.send(f"⚠️ No se pudo iniciar la tarea de polling de logs en este momento: {e}. Intenta de nuevo en unos segundos.")
             else:
-                await interaction.followup.send(f"ℹ️ El puente de chat ya está activo y enviando mensajes a {target_channel.mention}.", ephemeral=True)
+                self.chat_bridge_active = True 
+                await interaction.followup.send(f"ℹ️ El puente de chat ya está activo y enviando mensajes a {target_channel.mention}.")
 
         elif action == "disable":
-            if self.remote_log_polling_task.is_running():
-                self.remote_log_polling_task.cancel()
-                logger.info(f"Tarea remote_log_polling_task detenida por comando /mcchat disable.")
-                await interaction.followup.send("✅ Puente de chat desactivado.")
+            self.chat_bridge_active = False 
+            if self._remote_log_polling_loop.is_running():
+                self._remote_log_polling_loop.cancel()
+                logger.info(f"Tarea _remote_log_polling_loop detenida por comando /mcchat disable.")
+                await interaction.followup.send("✅ Puente de chat desactivado. El sondeo de logs se ha detenido.")
             else:
-                await interaction.followup.send("ℹ️ El puente de chat ya está inactivo.", ephemeral=True)
+                await interaction.followup.send("ℹ️ El puente de chat ya estaba inactivo.")
 
         elif action == "status":
             status_msg = "ℹ️ **Estado del Puente de Chat Minecraft**:\n"
             target_channel = self.bot.get_channel(self.chat_channel_id) if self.chat_channel_id else None
             
-            if self.mc_log_api_url and self.mc_log_api_token:
-                status_msg += f"- Tarea de polling de logs: {'Activa ✅' if self.remote_log_polling_task.is_running() else 'Inactiva ❌'}\n"
+            api_configured = bool(self.mc_log_api_url and self.mc_log_api_token)
+            status_msg += f"- Estado General: {'Activado ✅' if self.chat_bridge_active else 'Desactivado ❌'}\n"
+            if api_configured:
+                status_msg += f"- Tarea de polling: {'Activa ✅' if self._remote_log_polling_loop.is_running() and self.chat_bridge_active else 'Inactiva ❌'}\n"
             else:
-                status_msg += "- Tarea de polling de logs: Inactiva ❌ (API no configurada)\n"
-                
-            status_msg += f"- Canal de Discord: {target_channel.mention if target_channel else 'No configurado o no encontrado'}\n"
+                status_msg += "- Tarea de polling: Inactiva ❌ (API no configurada)\n"
+            status_msg += f"- Canal de Discord: {target_channel.mention if target_channel else 'No configurado'}\n"
             status_msg += f"  (ID: {self.chat_channel_id if self.chat_channel_id else 'N/A'})\n"
-            status_msg += f"- API de Logs Remotos: {'Configurada ✅' if self.mc_log_api_url and self.mc_log_api_token else 'No configurada ❌ (revisa `MC_LOG_API_URL` y `MC_LOG_API_TOKEN`)'}"
+            status_msg += f"- API de Logs Remotos: {'Configurada ✅' if api_configured else 'No configurada ❌ (revisa `MC_LOG_API_URL` y `MC_LOG_API_TOKEN`)'}"
             await interaction.followup.send(status_msg, ephemeral=True)
 
         elif action == "set_channel":
@@ -652,37 +658,41 @@ class MinecraftCog(commands.Cog):
                 await ctx.send(f"❌ No se pudo encontrar el canal de chat configurado (ID: {self.chat_channel_id}). Verifica el ID y los permisos del bot.")
                 return
 
-            if not self.remote_log_polling_task.is_running():
+            if not self._remote_log_polling_loop.is_running():
                 try:
-                    self.remote_log_polling_task.start()
-                    logger.info(f"Tarea remote_log_polling_task iniciada por comando m.mcchat enable.")
-                    await ctx.send(f"✅ Puente de chat activado. Mensajes del juego se enviarán a {target_channel.mention}.")
+                    if not self.aiohttp_session or self.aiohttp_session.closed:
+                        self.aiohttp_session = aiohttp.ClientSession()
+                    self.chat_bridge_active = True
+                    self._remote_log_polling_loop.start()
+                    logger.info(f"Tarea _remote_log_polling_loop iniciada por comando m.mcchat enable.")
+                    await ctx.send(f"✅ Puente de chat activado. Mensajes a {target_channel.mention}.")
                 except RuntimeError as e:
-                    logger.error(f"Error al intentar iniciar remote_log_polling_task: {e}")
-                    await ctx.send(f"⚠️ No se pudo iniciar la tarea de polling de logs: {e}")
+                    logger.error(f"Error al iniciar _remote_log_polling_loop (texto): {e}")
+                    await ctx.send(f"⚠️ No se pudo iniciar la tarea: {e}.")
             else:
-                await ctx.send(f"ℹ️ El puente de chat ya está activo y enviando mensajes a {target_channel.mention}.")
+                self.chat_bridge_active = True
+                await ctx.send(f"ℹ️ El puente de chat ya está activo ({target_channel.mention}).")
 
         elif action == "disable":
-            if self.remote_log_polling_task.is_running():
-                self.remote_log_polling_task.cancel()
-                logger.info(f"Tarea remote_log_polling_task detenida por comando m.mcchat disable.")
+            self.chat_bridge_active = False
+            if self._remote_log_polling_loop.is_running():
+                self._remote_log_polling_loop.cancel()
+                logger.info(f"Tarea _remote_log_polling_loop detenida por comando m.mcchat disable.")
                 await ctx.send("✅ Puente de chat desactivado.")
             else:
                 await ctx.send("ℹ️ El puente de chat ya está inactivo.")
 
         elif action == "status":
-            status_msg = "ℹ️ **Estado del Puente de Chat Minecraft**:\n"
+            status_msg = "ℹ️ **Estado del Puente de Chat Minecraft (Texto)**:\n"
             target_channel = self.bot.get_channel(self.chat_channel_id) if self.chat_channel_id else None
-            
-            if self.mc_log_api_url and self.mc_log_api_token:
-                status_msg += f"- Tarea de polling de logs: {'Activa ✅' if self.remote_log_polling_task.is_running() else 'Inactiva ❌'}\n"
+            api_configured = bool(self.mc_log_api_url and self.mc_log_api_token)
+            status_msg += f"- Estado General: {'Activado ✅' if self.chat_bridge_active else 'Desactivado ❌'}\n"
+            if api_configured:
+                status_msg += f"- Tarea de polling: {'Activa ✅' if self._remote_log_polling_loop.is_running() and self.chat_bridge_active else 'Inactiva ❌'}\n"
             else:
-                status_msg += "- Tarea de polling de logs: Inactiva ❌ (API no configurada)\n"
-
-            status_msg += f"- Canal de Discord: {target_channel.mention if target_channel else 'No configurado o no encontrado'}\n"
-            status_msg += f"  (ID: {self.chat_channel_id if self.chat_channel_id else 'N/A'})\n"
-            status_msg += f"- API de Logs Remotos: {'Configurada ✅' if self.mc_log_api_url and self.mc_log_api_token else 'No configurada ❌ (revisa `MC_LOG_API_URL` y `MC_LOG_API_TOKEN`)'}"
+                status_msg += "- Tarea de polling: Inactiva ❌ (API no configurada)\n"
+            status_msg += f"- Canal Discord: {target_channel.mention if target_channel else 'No configurado'}\n"
+            status_msg += f"- API Logs: {'Configurada ✅' if api_configured else 'No configurada ❌'}"
             await ctx.send(status_msg)
 
         elif action == "set_channel":
@@ -697,8 +707,8 @@ class MinecraftCog(commands.Cog):
 
     @app_commands.command(name="mcsay", description="Envía un mensaje al chat del servidor de Minecraft")
     @app_commands.describe(message="Mensaje a enviar al servidor")
-    async def minecraft_say(self, interaction: discord.Interaction, message: str):
-        await interaction.response.defer()
+    async def minecraft_say(self, interaction: Interaction, message: str):
+        await interaction.response.defer(ephemeral=True)
         if not self.rcon_password:
             await interaction.followup.send("❌ RCON no está configurado (falta contraseña). No se puede enviar el mensaje.", ephemeral=True)
             return
@@ -738,8 +748,10 @@ class MinecraftCog(commands.Cog):
             
     def cog_unload(self):
         logger.info("Descargando MinecraftCog...")
-        if self.remote_log_polling_task.is_running():
-            self.remote_log_polling_task.cancel()
+        # Es importante verificar si el atributo existe antes de intentar usarlo,
+        # especialmente si la carga del cog pudo haber fallado.
+        if hasattr(self, '_remote_log_polling_loop') and self._remote_log_polling_loop.is_running():
+            self._remote_log_polling_loop.cancel()
             logger.info("Tarea de polling de logs remotos cancelada.")
         
         if hasattr(self, 'aiohttp_session') and self.aiohttp_session and not self.aiohttp_session.closed:
@@ -754,282 +766,66 @@ class MinecraftCog(commands.Cog):
             logger.info("No se encontró sesión aiohttp activa para cerrar o ya estaba cerrada.")
         logger.info("MinecraftCog descargado.")
 
-async def setup(bot):
-    await bot.add_cog(MinecraftCog(bot))
-    async def minecraft_chat_bridge(self, interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
-        """Configura el puente de chat entre Minecraft y Discord"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Solo los administradores pueden configurar el chat bridge.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(title="🌉 Puente de Chat Minecraft-Discord", color=discord.Color.blue())
-        
-        if action == "enable":
-            if not self.mc_log_api_url or not self.mc_log_api_token:
-                embed.description = "❌ No se puede activar: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados en el bot."
-            elif not self.chat_channel_id:
-                embed.description = "❌ No se puede activar: canal de chat no configurado en Discord."
-                embed.add_field(name="🔧 Solución", value="Usa `/mcchat set_channel` para configurar el canal", inline=False)
-            else:
-                self.chat_bridge_active = True
-                if not self.remote_log_polling_task.is_running():
-                    try:
-                        self.remote_log_polling_task.start()
-                        embed.description = "✅ Puente de chat activado. Iniciando sondeo de logs remotos."
-                    except RuntimeError:
-                        embed.description = "✅ Puente de chat ya estaba intentando activarse o ya está activo."
+    # --- Funciones de Check Personalizadas ---
+    def is_allowed_guild(self, ctx_or_interaction) -> bool:
+        if not self.allowed_guild_id: return True # Si no está configurado, permitir todos
+        guild_id = ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id
+        return guild_id == self.allowed_guild_id
+
+    def is_allowed_channel(self, ctx_or_interaction) -> bool:
+        if not self.allowed_channel_id: return True
+        channel_id = ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id
+        return channel_id == self.allowed_channel_id
+
+    def is_allowed_user(self, ctx_or_interaction) -> bool:
+        if not self.allowed_user_id: return True
+        user_id = ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id
+        return user_id == self.allowed_user_id
+
+    # --- Check Combinado para aplicar a comandos ---
+    async def combined_access_check(self, ctx_or_interaction) -> bool:
+        if not self.is_allowed_guild(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: Guild ID {ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id} no permitido.")
+            raise commands.CheckFailure("Este comando no está permitido en este servidor.")
+        if not self.is_allowed_channel(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: Channel ID {ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id} no permitido.")
+            raise commands.CheckFailure("Este comando no está permitido en este canal.")
+        if not self.is_allowed_user(ctx_or_interaction):
+            # print(f"[DEBUG] Bloqueado: User ID {ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id} no permitido.")
+            raise commands.CheckFailure("No tienes permiso para usar este comando.")
+        return True
+
+    async def cog_check(self, ctx_or_interaction: Interaction | commands.Context):
+        # El argumento puede ser commands.Context o discord.Interaction
+        # Necesitamos manejar ambos casos para obtener los IDs relevantes
+        if isinstance(ctx_or_interaction, commands.Context): # Para comandos de texto
+            return await self.combined_access_check(ctx_or_interaction)
+        # Para interacciones (app_commands), discord.py maneja los checks de forma nativa
+        # si se usa @app_commands.check decorator.
+        # Este cog_check unificado es un poco más complejo para app_commands.
+        # Si es una Interaction, el check ya se aplicó o es manejado por el decorador del comando.
+        # Para mantener la lógica de combined_access_check para interacciones desde aquí:
+        elif isinstance(ctx_or_interaction, Interaction): # Para comandos de aplicación
+             return await self.combined_access_check(ctx_or_interaction)
+        return False
+
+    async def cog_command_error(self, ctx_or_interaction: Interaction | commands.Context, error):
+        # ctx_or_interaction puede ser Context o Interaction
+        if isinstance(error, commands.CheckFailure):
+            message = str(error) if str(error) else "No cumples con los requisitos para usar este comando aquí."
+            if isinstance(ctx_or_interaction, Interaction): # <--- CAMBIAR AQUÍ
+                # Si la interacción ya fue respondida (defer), usar followup
+                if ctx_or_interaction.response.is_done():
+                    await ctx_or_interaction.followup.send(message, ephemeral=True)
                 else:
-                    embed.description = "✅ Puente de chat activado. El sondeo de logs remotos ya está en curso."
-                embed.color = discord.Color.green()
-        
-        elif action == "disable":
-            self.chat_bridge_active = False
-            embed.description = "❌ Puente de chat desactivado. El sondeo de logs remotos se detendrá en la próxima iteración o ya está inactivo."
-            embed.color = discord.Color.red()
-        
-        elif action == "set_channel":
-            if channel:
-                self.chat_channel_id = channel.id
-                embed.description = f"✅ Canal configurado para el chat bridge: {channel.mention}"
-                embed.color = discord.Color.green()
+                    await ctx_or_interaction.response.send_message(message, ephemeral=True)
             else:
-                embed.description = "❌ Debes especificar un canal"
-        
-        elif action == "status":
-            status_emoji = "✅" if self.chat_bridge_active else "❌"
-            task_status = "Activa y sondeando" if self.remote_log_polling_task.is_running() and self.chat_bridge_active else "Inactiva"
-            if self.chat_bridge_active and (not self.mc_log_api_url or not self.mc_log_api_token):
-                task_status = "Configuración API incompleta"
-            
-            embed.description = f"{status_emoji} Estado General: {'Activado' if self.chat_bridge_active else 'Desactivado'}\n📡 Tarea de Sondeo: {task_status}"
-            
-            embed.add_field(
-                name="🌐 URL del API de Logs",
-                value=f"```{self.mc_log_api_url if self.mc_log_api_url else 'No configurado'}```",
-                inline=False
-            )
-            embed.add_field(
-                name="🔑 Token API",
-                value=f"{'Configurado' if self.mc_log_api_token else 'No configurado'}",
-                inline=False
-            )
-            
-            if self.chat_channel_id:
-                chat_channel_for_bridge = self.bot.get_channel(self.chat_channel_id)
-                embed.add_field(
-                    name="💬 Canal de chat (bridge)",
-                    value=chat_channel_for_bridge.mention if chat_channel_for_bridge else "Canal no encontrado",
-                    inline=False
-                )
-            else:
-                embed.add_field(
-                    name="💬 Canal de chat (bridge)",
-                    value="No configurado",
-                    inline=False
-                )
-        
-        await interaction.response.send_message(embed=embed)
-
-    @commands.command(name="mcchat", help="Configura el chat bridge. Uso: m.mcchat <enable|disable|status|set_channel> [canal]")
-    async def text_minecraft_chat_bridge(self, ctx: commands.Context, action: str, channel: discord.TextChannel = None):
-        """Configura el puente de chat (versión texto)"""
-        action = action.lower()
-        valid_actions = ["enable", "disable", "status", "set_channel"]
-        if action not in valid_actions:
-            await ctx.send(f"❌ Acción inválida. Acciones válidas: {', '.join(valid_actions)}")
-            return
-
-        embed = discord.Embed(title="🌉 Puente de Chat Minecraft-Discord", color=discord.Color.blue())
-        if action == "enable":
-            if not self.mc_log_api_url or not self.mc_log_api_token:
-                embed.description = "❌ No se puede activar: MC_LOG_API_URL o MC_LOG_API_TOKEN no configurados."
-            elif not self.chat_channel_id:
-                embed.description = "❌ No se puede activar: canal de chat no configurado."
-                embed.add_field(name="🔧 Solución", value="Usa `m.mcchat set_channel #canal`", inline=False)
-            else:
-                self.chat_bridge_active = True
-                if not self.remote_log_polling_task.is_running():
-                    try:
-                        self.remote_log_polling_task.start()
-                        embed.description = "✅ Puente de chat activado. Iniciando sondeo de logs remotos."
-                    except RuntimeError:
-                        embed.description = "✅ Puente de chat ya estaba intentando activarse o ya está activo."
-                else:
-                    embed.description = "✅ Puente de chat activado. El sondeo de logs remotos ya está en curso."
-                embed.color = discord.Color.green()
-        elif action == "disable":
-            self.chat_bridge_active = False
-            embed.description = "❌ Puente de chat desactivado. El sondeo de logs remotos se detendrá."
-            embed.color = discord.Color.red()
-        elif action == "set_channel":
-            if channel:
-                self.chat_channel_id = channel.id
-                embed.description = f"✅ Canal configurado para el chat bridge: {channel.mention}"
-                embed.color = discord.Color.green()
-            else:
-                embed.description = "❌ Debes especificar un canal (mención, ID o nombre)."
-        elif action == "status":
-            status_emoji = "✅" if self.chat_bridge_active else "❌"
-            task_status = "Activa y sondeando" if self.remote_log_polling_task.is_running() and self.chat_bridge_active else "Inactiva"
-            if self.chat_bridge_active and (not self.mc_log_api_url or not self.mc_log_api_token):
-                task_status = "Configuración API incompleta"
-
-            embed.description = f"{status_emoji} Estado General: {'Activado' if self.chat_bridge_active else 'Desactivado'}\n📡 Tarea de Sondeo: {task_status}"
-            embed.add_field(name="🌐 URL API Logs", value=f"```{self.mc_log_api_url if self.mc_log_api_url else 'No configurado'}```", inline=False)
-            embed.add_field(name="🔑 Token API", value=f"{'Configurado' if self.mc_log_api_token else 'No configurado'}", inline=False)
-            if self.chat_channel_id:
-                chat_channel_for_bridge = self.bot.get_channel(self.chat_channel_id)
-                embed.add_field(name="💬 Canal de chat (bridge)", value=chat_channel_for_bridge.mention if chat_channel_for_bridge else "Canal no encontrado", inline=False)
-            else:
-                embed.add_field(name="💬 Canal de chat (bridge)", value="No configurado", inline=False)
-        await ctx.send(embed=embed)
-
-    @app_commands.command(name="mcsay", description="Envía un mensaje al chat del servidor de Minecraft")
-    @app_commands.describe(message="Mensaje a enviar al servidor")
-    async def minecraft_say(self, interaction: discord.Interaction, message: str):
-        """Envía un mensaje al chat del servidor desde Discord"""
-        await interaction.response.defer()
-        
-        formatted_message = f"[Discord] {interaction.user.display_name}: {message}"
-        rcon_command_to_send = f"say {formatted_message}"
-        result_from_rcon = await self.execute_rcon_command(rcon_command_to_send)
-        
-        embed = discord.Embed(
-            title="💬 Mensaje Enviado",
-            color=discord.Color.green()
-        )
-        
-        embed.add_field(
-            name="👤 Usuario",
-            value=interaction.user.display_name,
-            inline=True
-        )
-        
-        embed.add_field(
-            name="💬 Mensaje",
-            value=message,
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📤 Estado",
-            value="✅ Enviado al servidor" if "Unknown command" not in result_from_rcon and "Error" not in result_from_rcon else "❌ Error enviando mensaje",
-            inline=False
-        )
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @commands.command(name="mcsay", help="Envía un mensaje al chat del servidor de Minecraft. Uso: m.mcsay <mensaje>")
-    async def text_minecraft_say(self, ctx: commands.Context, *, message: str):
-        """Comando de texto para enviar un mensaje al servidor de Minecraft"""
-        if not message:
-            await ctx.send("❌ Debes escribir un mensaje para enviar.")
-            return
-
-        formatted_message = f"[Discord] {ctx.author.display_name}: {message}"
-        rcon_command_to_send = f"say {formatted_message}"
-        result_from_rcon = await self.execute_rcon_command(rcon_command_to_send)
-
-        embed = discord.Embed(
-            title="💬 Mensaje Enviado (vía comando de texto)",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="👤 Usuario", value=ctx.author.display_name, inline=True)
-        embed.add_field(name="💬 Mensaje", value=message, inline=False)
-        embed.add_field(
-            name="📤 Estado",
-            value="✅ Enviado al servidor" if "Unknown command" not in result_from_rcon and "Error" not in result_from_rcon else "❌ Error enviando mensaje",
-            inline=False
-        )
-        await ctx.send(embed=embed)
-
-    @app_commands.command(name="mcconfig", description="Muestra la configuración actual del servidor de Minecraft")
-    async def minecraft_config(self, interaction: discord.Interaction):
-        """Muestra la configuración del bot para Minecraft"""
-        embed = discord.Embed(
-            title="⚙️ Configuración de Minecraft",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(
-            name="🌐 Servidor",
-            value=f"`{self.server_ip}:{self.server_port}`",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🔧 RCON",
-            value=f"Puerto: `{self.rcon_port}`\nConfigurado: {'✅' if self.rcon_password else '❌'}",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🌉 Chat Bridge",
-            value=f"Estado: {'✅ Activo' if self.chat_bridge_active else '❌ Inactivo'}\nCanal: {'✅ Configurado' if self.chat_channel_id else '❌ No configurado'}",
-            inline=True
-        )
-        
-        # Información del proxy
-        if self.proxy_config:
-            embed.add_field(
-                name="🌐 IP Estática",
-                value=f"✅ Fixie Socks configurado\nHost: `{self.proxy_config['host']}`",
-                inline=True
-            )
-        else:
-            embed.add_field(
-                name="🌐 IP Estática",
-                value="❌ No configurado",
-                inline=True
-            )
-        
-        embed.add_field(
-            name="📋 Variables de Entorno",
-            value="```\nMC_SERVER_IP\nMC_SERVER_PORT\nMC_RCON_PORT\nMC_RCON_PASSWORD\nMC_CHAT_CHANNEL_ID\nMC_LOG_PATH\nFIXIE_SOCKS_HOST\n```",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @commands.command(name="mcconfig", help="Muestra la configuración actual de Minecraft. Uso: m.mcconfig")
-    async def text_minecraft_config(self, ctx: commands.Context):
-        """Muestra la configuración del bot para Minecraft (versión texto)"""
-        embed = discord.Embed(title="⚙️ Configuración de Minecraft", color=discord.Color.blue())
-        embed.add_field(name="🌐 Servidor", value=f"`{self.server_ip}:{self.server_port}`", inline=True)
-        embed.add_field(name="🔧 RCON", value=f"Puerto: `{self.rcon_port}`\nConfigurado: {'✅' if self.rcon_password else '❌'}", inline=True)
-        embed.add_field(name="🌉 Chat Bridge", value=f"Estado: {'✅ Activo' if self.chat_bridge_active else '❌ Inactivo'}\nCanal: {'✅ Configurado' if self.chat_channel_id else '❌ No configurado'}", inline=True)
-        if self.proxy_config:
-            embed.add_field(name="🌐 IP Estática", value=f"✅ Fixie Socks configurado\nHost: `{self.proxy_config['host']}`", inline=True)
-        else:
-            embed.add_field(name="🌐 IP Estática", value="❌ No configurado", inline=True)
-        embed.add_field(name="📋 Variables de Entorno", value="```\nMC_SERVER_IP\nMC_SERVER_PORT\nMC_RCON_PORT\nMC_RCON_PASSWORD\nMC_CHAT_CHANNEL_ID\nMC_LOG_PATH\nFIXIE_SOCKS_HOST\nMC_ALLOWED_GUILD_ID\nMC_ALLOWED_CHANNEL_ID\nMC_ALLOWED_USER_ID\n```", inline=False)
-        await ctx.send(embed=embed)
-
-    @app_commands.command(name="mcchat_restart", description="Reinicia manualmente el monitor del chat bridge de Minecraft")
-    async def minecraft_chat_restart(self, interaction: discord.Interaction):
-        """Permite reiniciar manualmente el monitor del chat bridge"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Solo los administradores pueden reiniciar el chat bridge.", ephemeral=True)
-            return
-        self.remote_log_polling_task.cancel()
-        await asyncio.sleep(1)
-        self.remote_log_polling_task.start()
-        await interaction.response.send_message("🔄 Chat bridge reiniciado correctamente.", ephemeral=True)
-
-    @commands.command(name="mcchat_restart", help="Reinicia el monitor del chat bridge. Uso: m.mcchat_restart")
-    async def text_minecraft_chat_restart(self, ctx: commands.Context):
-        """Reinicia manualmente el monitor del chat bridge (versión texto)"""
-        # Aquí podrías añadir una comprobación de ctx.author.guild_permissions.administrator si quisieras
-        # pero como solo tu usuario puede usarlo, el cog_check es suficiente por ahora.
-        self.remote_log_polling_task.cancel()
-        await asyncio.sleep(1) # Dar tiempo para que se detenga completamente
-        self.remote_log_polling_task.start()
-        await ctx.send("🔄 Chat bridge reiniciado correctamente.")
+                await ctx_or_interaction.send(message, ephemeral=True)
 
     @tasks.loop(seconds=5)
-    async def remote_log_polling_task(self):
+    async def _remote_log_polling_loop(self):
         if not self.chat_bridge_active:
-            return # No hacer nada si el bridge no está activo
+            return
 
         if not self.mc_log_api_url or not self.mc_log_api_token:
             # print("Polling de logs no configurado (URL o Token faltan).")
@@ -1095,47 +891,18 @@ async def setup(bot):
             import traceback
             traceback.print_exc()
 
-    @remote_log_polling_task.before_loop
+    @_remote_log_polling_loop.before_loop
     async def before_remote_log_polling(self):
         await self.bot.wait_until_ready()
         if not self.aiohttp_session or self.aiohttp_session.closed:
             self.aiohttp_session = aiohttp.ClientSession()
-        print("⛏️ Tarea de polling de logs lista y esperando activación (o si ya está activa).")
+        print("⛏️ Tarea de polling de logs lista. Se ejecutará si el puente de chat está activo.")
 
     def cog_unload(self):
         """Limpieza al descargar el cog"""
         # Detener la tarea de polling si está corriendo
-        if self.remote_log_polling_task.is_running():
-            self.remote_log_polling_task.cancel()
+        if self._remote_log_polling_loop.is_running():
+            self._remote_log_polling_loop.cancel()
         self._reset_proxy()
-
-    # --- Funciones de Check Personalizadas ---
-    def is_allowed_guild(self, ctx_or_interaction) -> bool:
-        if not self.allowed_guild_id: return True # Si no está configurado, permitir todos
-        guild_id = ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id
-        return guild_id == self.allowed_guild_id
-
-    def is_allowed_channel(self, ctx_or_interaction) -> bool:
-        if not self.allowed_channel_id: return True
-        channel_id = ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id
-        return channel_id == self.allowed_channel_id
-
-    def is_allowed_user(self, ctx_or_interaction) -> bool:
-        if not self.allowed_user_id: return True
-        user_id = ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id
-        return user_id == self.allowed_user_id
-
-    # --- Check Combinado para aplicar a comandos ---
-    async def combined_access_check(self, ctx_or_interaction) -> bool:
-        if not self.is_allowed_guild(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: Guild ID {ctx_or_interaction.guild_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.guild.id} no permitido.")
-            raise commands.CheckFailure("Este comando no está permitido en este servidor.")
-        if not self.is_allowed_channel(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: Channel ID {ctx_or_interaction.channel_id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.channel.id} no permitido.")
-            raise commands.CheckFailure("Este comando no está permitido en este canal.")
-        if not self.is_allowed_user(ctx_or_interaction):
-            # print(f"[DEBUG] Bloqueado: User ID {ctx_or_interaction.user.id if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.id} no permitido.")
-            raise commands.CheckFailure("No tienes permiso para usar este comando.")
-        return True
 
     # ... existing code ...
