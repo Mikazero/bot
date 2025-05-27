@@ -907,3 +907,9 @@ class MinecraftCog(commands.Cog):
         self._reset_proxy()
 
     # ... existing code ...
+
+async def setup(bot):
+    cog = MinecraftCog(bot)
+    await bot.add_cog(cog)
+    # Ya no se llama a cog_load aquí, discord.py se encarga de ello.
+    logger.info("MinecraftCog añadido al bot y setup completado. cog_load será llamado por discord.py.")
