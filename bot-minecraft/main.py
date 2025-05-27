@@ -4,6 +4,20 @@ from discord import app_commands
 import os
 import logging
 
+# Configuración detallada de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)-8s] %(name)-25s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler()  # Envía logs a la consola (stdout/stderr)
+    ]
+)
+
+# Opcional: Silenciar un poco los logs de discord.py si son muy verbosos
+# logging.getLogger('discord.client').setLevel(logging.WARNING)
+# logging.getLogger('discord.gateway').setLevel(logging.WARNING)
+# logging.getLogger('discord.http').setLevel(logging.WARNING)
 
 intents = discord.Intents.default()
 intents.message_content = True
