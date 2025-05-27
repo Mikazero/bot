@@ -40,11 +40,23 @@ class MinecraftCog(commands.Cog):
         logger.info(f"  - Canal permitido: {self.allowed_channel_id if self.allowed_channel_id else 'Cualquiera'}")
         logger.info(f"  - Usuario permitido: {self.allowed_user_id if self.allowed_user_id else 'Cualquiera'}")
 
+        # Frases clave que indican una muerte, después de "PlayerName "
+        self.death_core_phrases = [
+            "was slain", "was shot", "was killed", "was fireballed", "was pummeled",
+            "was pricked", "was impaled", "was struck", "was burnt", "was squashed",
+            "hit the ground", "fell", # "fell" es genérico y cubrirá "fell from", "fell off", etc.
+            "drowned", "suffocated", "died", "perished", "went up in flames",
+            "burned", "froze to death", "starved to death", "tried to swim in lava",
+            "experienced kinetic energy", "withered", "blew up"
+        ]
+        death_regex_clauses = "|".join([re.escape(phrase) for phrase in self.death_core_phrases])
+        death_pattern_str = rf"\\[\\d{{2}}:\\d{{2}}:\\d{{2}}\\] \\[Server thread/INFO\\]: (\\w+\\s+(?:{death_regex_clauses}).*)"
+
         self.log_patterns = [
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\\[Not Secure\\] )?<(\\w+)> (.+)'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) joined the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) left the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+ .*)')
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\\\\[Not Secure\\\\] )?<(\\w+)> (.+)'),
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) joined the game'),
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) left the game'),
+            re.compile(death_pattern_str) # Patrón de muerte actualizado y más específico
         ]
         
         self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
