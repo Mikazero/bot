@@ -73,53 +73,75 @@ class MinecraftCog(commands.Cog):
             
         self.processed_log_timestamps.add(log_identifier)
         if len(self.processed_log_timestamps) > 1000:
-            self.processed_log_timestamps.pop()
+            list_processed = list(self.processed_log_timestamps)
+            self.processed_log_timestamps = set(list_processed[-1000:])
 
         current_time_for_embed = datetime.now()
 
-        match = self.log_patterns[0].match(line)
+        match = self.log_patterns[0].search(line)
         if match:
-            player, message = match.groups()[1], match.groups()[2]
-            embed = discord.Embed(
-                description=f"💬 **{player}**: {message}",
-                color=discord.Color.blue(),
-                timestamp=current_time_for_embed
-            )
-            await channel.send(embed=embed)
-            return
+            try:
+                player = match.group(1)
+                message = match.group(2)
+                logger.info(f"[MinecraftCog] process_log_line: Chat detectado - Jugador: '{player}', Mensaje: '{message}'")
+                embed = discord.Embed(
+                    description=f"💬 **{player.strip()}**: {message.strip()}",
+                    color=discord.Color.blue(),
+                    timestamp=current_time_for_embed
+                )
+                await channel.send(embed=embed)
+                return
+            except IndexError:
+                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar chat. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                return
         
-        match = self.log_patterns[1].match(line)
+        match = self.log_patterns[1].search(line)
         if match:
-            player = match.groups()[1]
-            embed = discord.Embed(
-                description=f"✅ **{player}** se unió al servidor.",
-                color=discord.Color.green(),
-                timestamp=current_time_for_embed
-            )
-            await channel.send(embed=embed)
-            return
+            try:
+                player = match.group(1)
+                logger.info(f"[MinecraftCog] process_log_line: Jugador unido detectado - Jugador: '{player}'")
+                embed = discord.Embed(
+                    description=f"✅ **{player.strip()}** se unió al servidor.",
+                    color=discord.Color.green(),
+                    timestamp=current_time_for_embed
+                )
+                await channel.send(embed=embed)
+                return
+            except IndexError:
+                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar 'joined the game'. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                return
         
-        match = self.log_patterns[2].match(line)
+        match = self.log_patterns[2].search(line)
         if match:
-            player = match.groups()[1]
-            embed = discord.Embed(
-                description=f"❌ **{player}** salió del servidor.",
-                color=discord.Color.red(),
-                timestamp=current_time_for_embed
-            )
-            await channel.send(embed=embed)
-            return
+            try:
+                player = match.group(1)
+                logger.info(f"[MinecraftCog] process_log_line: Jugador salido detectado - Jugador: '{player}'")
+                embed = discord.Embed(
+                    description=f"❌ **{player.strip()}** salió del servidor.",
+                    color=discord.Color.red(),
+                    timestamp=current_time_for_embed
+                )
+                await channel.send(embed=embed)
+                return
+            except IndexError:
+                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar 'left the game'. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                return
         
-        match = self.log_patterns[3].match(line)
+        match = self.log_patterns[3].search(line)
         if match:
-            death_message = match.groups()[1]
-            embed = discord.Embed(
-                description=f"💀 {death_message}",
-                color=discord.Color.dark_grey(),
-                timestamp=current_time_for_embed
-            )
-            await channel.send(embed=embed)
-            return
+            try:
+                death_message = match.group(1)
+                logger.info(f"[MinecraftCog] process_log_line: Muerte detectada - Mensaje: '{death_message}'")
+                embed = discord.Embed(
+                    description=f"💀 {death_message.strip()}",
+                    color=discord.Color.dark_grey(),
+                    timestamp=current_time_for_embed
+                )
+                await channel.send(embed=embed)
+                return
+            except IndexError:
+                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar muerte. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                return
 
     async def get_server_status(self):
         logger.debug(f"[MinecraftCog] get_server_status: Intentando obtener estado para {self.server_ip}:{self.server_port}")
