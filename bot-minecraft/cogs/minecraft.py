@@ -159,7 +159,7 @@ class MinecraftCog(commands.Cog):
         status = await self.get_server_status()
         
         if status is None:
-            embed = discord.Embed(title="�� Servidor Offline", description=f"No se pudo conectar a `{self.server_ip}:{self.server_port}`", color=discord.Color.red())
+            embed = discord.Embed(title="🔴 Servidor Offline", description=f"No se pudo conectar a `{self.server_ip}:{self.server_port}`", color=discord.Color.red())
         else:
             embed = discord.Embed(title="🟢 Servidor Online", description=f"**{self.server_ip}:{self.server_port}**", color=discord.Color.green())
             embed.add_field(name="👥 Jugadores", value=f"{status.players.online}/{status.players.max}", inline=True)
@@ -702,6 +702,33 @@ class MinecraftCog(commands.Cog):
             logger.info("[MinecraftCog] before_remote_log_polling: Creando sesión aiohttp inicial.")
             self.aiohttp_session = aiohttp.ClientSession()
         logger.info("⛏️ [MinecraftCog] Tarea de polling de logs lista y sesión aiohttp preparada. Se ejecutará si el puente de chat está activo.")
+
+    @commands.command(name="mcdiag", help="Muestra información de diagnóstico del MinecraftCog.")
+    async def text_minecraft_diag(self, ctx: commands.Context):
+        logger.info("[MinecraftCog] m.mcdiag: Comando de diagnóstico recibido.")
+        diag_message = "🔧 **Diagnóstico de MinecraftCog:**\\n"
+        diag_message += f"- `MC_LOG_API_URL` configurado: {bool(self.mc_log_api_url)}\\n"
+        diag_message += f"  - Valor (primeros 20 chars): `{self.mc_log_api_url[:20] if self.mc_log_api_url else 'No establecido'}`\\n"
+        diag_message += f"- `MC_LOG_API_TOKEN` configurado: {bool(self.mc_log_api_token)}\\n"
+        diag_message += f"  - Valor (primeros 5 chars): `{self.mc_log_api_token[:5] + '...' if self.mc_log_api_token else 'No establecido'}`\\n"
+        diag_message += f"- `MC_CHAT_CHANNEL_ID` configurado: {self.chat_channel_id if self.chat_channel_id != 0 else 'No establecido (0)'}\\n"
+        
+        task_running = False
+        if hasattr(self, '_remote_log_polling_loop'):
+            task_running = self._remote_log_polling_loop.is_running()
+        diag_message += f"- Tarea `_remote_log_polling_loop` existe: {hasattr(self, '_remote_log_polling_loop')}\\n"
+        diag_message += f"- Tarea `_remote_log_polling_loop` corriendo: {task_running}\\n"
+        diag_message += f"- `chat_bridge_active` (flag): {self.chat_bridge_active}\\n"
+        
+        if hasattr(self, 'aiohttp_session') and self.aiohttp_session:
+            diag_message += f"- Sesión `aiohttp_session` cerrada: {self.aiohttp_session.closed}\\n"
+        else:
+            diag_message += "- Sesión `aiohttp_session`: No inicializada o no existe\\n"
+            
+        diag_message += "\\n*Intenta `m.mcchat enable` y luego `m.mcdiag` otra vez después de ~10s.*"
+        
+        logger.info(f"[MinecraftCog] m.mcdiag: Enviando mensaje de diagnóstico:\\n{diag_message}")
+        await ctx.send(diag_message)
 
 async def setup(bot):
     cog = MinecraftCog(bot)
