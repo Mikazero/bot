@@ -13,6 +13,7 @@ import re
 import socks
 import socket
 import logging # Añadir logging
+from typing import Union # <--- AÑADIR ESTA LÍNEA
 
 logger = logging.getLogger(__name__) # Configurar un logger para el cog
 
@@ -795,7 +796,7 @@ class MinecraftCog(commands.Cog):
             raise commands.CheckFailure("No tienes permiso para usar este comando.")
         return True
 
-    async def cog_check(self, ctx_or_interaction: Interaction | commands.Context):
+    async def cog_check(self, ctx_or_interaction: Union[Interaction, commands.Context]):
         # El argumento puede ser commands.Context o discord.Interaction
         # Necesitamos manejar ambos casos para obtener los IDs relevantes
         if isinstance(ctx_or_interaction, commands.Context): # Para comandos de texto
@@ -809,7 +810,7 @@ class MinecraftCog(commands.Cog):
              return await self.combined_access_check(ctx_or_interaction)
         return False
 
-    async def cog_command_error(self, ctx_or_interaction: Interaction | commands.Context, error):
+    async def cog_command_error(self, ctx_or_interaction: Union[Interaction, commands.Context], error):
         # ctx_or_interaction puede ser Context o Interaction
         if isinstance(error, commands.CheckFailure):
             message = str(error) if str(error) else "No cumples con los requisitos para usar este comando aquí."
