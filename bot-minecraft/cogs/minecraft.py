@@ -50,7 +50,7 @@ class MinecraftCog(commands.Cog):
 
         # Patrones regex para el chat (ajustados para unificar)
         self.log_patterns = [
-            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: <(\\w+)> (.+)'),  # Chat
+            re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (?:\[Not Secure\] )?<(\\w+)> (.+)'), # Chat (Nuevo, maneja "[Not Secure] ")
             re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) joined the game'),  # Join
             re.compile(r'\\[\\d{2}:\\d{2}:\\d{2}\\] \\[Server thread/INFO\\]: (\\w+) left the game'),  # Leave
             # Podrías añadir más patrones aquí (muertes, logros, etc.)
@@ -851,6 +851,7 @@ class MinecraftCog(commands.Cog):
             async with self.aiohttp_session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 200:
                     data = await response.json()
+                    logger.info(f"Respuesta JSON del API de logs: {data}")
                     # El API (después de modificarlo) devolverá {"new_lines": [...]} 
                     new_lines = data.get("new_lines", []) # REVERTIDO AQUÍ de "lines" a "new_lines"
                     if new_lines:
