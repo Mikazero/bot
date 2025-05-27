@@ -62,86 +62,118 @@ class MinecraftCog(commands.Cog):
         logger.info("[MinecraftCog] __init__ completado.")
 
     async def process_log_line(self, line: str, timestamp_str: str = None):
+        logger.info(f"[PLP_TRACE] Entrando a process_log_line. Línea: '{line[:100]}...', Timestamp_str: {timestamp_str}")
+
         channel = self.bot.get_channel(self.chat_channel_id)
         if not channel:
-            logger.error(f"Error: Canal de chat con ID {self.chat_channel_id} no encontrado.")
+            logger.error(f"[PLP_ERROR] Canal de chat con ID {self.chat_channel_id} no encontrado. No se puede procesar la línea: '{line[:100]}...'")
             return
 
         log_identifier = f"{timestamp_str}-{line}" if timestamp_str else line
         if log_identifier in self.processed_log_timestamps:
+            logger.info(f"[PLP_SKIP] Línea ya procesada (identificador: '{log_identifier[:100]}...'). Saltando: '{line[:100]}...'")
             return
             
+        # Si no se saltó, añadirla ahora para evitar procesamiento duplicado futuro
         self.processed_log_timestamps.add(log_identifier)
         if len(self.processed_log_timestamps) > 1000:
             list_processed = list(self.processed_log_timestamps)
             self.processed_log_timestamps = set(list_processed[-1000:])
 
         current_time_for_embed = datetime.now()
+        processed_by_a_pattern = False
 
-        match = self.log_patterns[0].search(line)
-        if match:
+        # Patrón de chat
+        chat_match = self.log_patterns[0].search(line)
+        if chat_match:
+            processed_by_a_pattern = True
             try:
-                player = match.group(1)
-                message = match.group(2)
-                logger.info(f"[MinecraftCog] process_log_line: Chat detectado - Jugador: '{player}', Mensaje: '{message}'")
+                player = chat_match.group(1)
+                message = chat_match.group(2)
+                logger.info(f"[PLP_MATCH_CHAT] Jugador: '{player}', Mensaje: '{message}' (Línea: '{line[:100]}...')")
                 embed = discord.Embed(
                     description=f"💬 **{player.strip()}**: {message.strip()}",
                     color=discord.Color.blue(),
                     timestamp=current_time_for_embed
                 )
                 await channel.send(embed=embed)
+                logger.info(f"[PLP_SENT_CHAT] Embed de chat para '{player}' enviado a canal '{channel.name}'.")
                 return
             except IndexError:
-                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar chat. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                logger.error(f"[PLP_ERROR_CHAT_INDEX] IndexError. Grupos: {chat_match.groups()}. Línea: {line[:100]}...", exc_info=True)
+                return
+            except Exception as e:
+                logger.error(f"[PLP_ERROR_CHAT_SEND] Excepción al enviar embed de chat: {e}. Línea: {line[:100]}...", exc_info=True)
                 return
         
-        match = self.log_patterns[1].search(line)
-        if match:
+        # Patrón de unirse
+        join_match = self.log_patterns[1].search(line)
+        if join_match:
+            processed_by_a_pattern = True
             try:
-                player = match.group(1)
-                logger.info(f"[MinecraftCog] process_log_line: Jugador unido detectado - Jugador: '{player}'")
+                player = join_match.group(1)
+                logger.info(f"[PLP_MATCH_JOIN] Jugador: '{player}' (Línea: '{line[:100]}...')")
                 embed = discord.Embed(
                     description=f"✅ **{player.strip()}** se unió al servidor.",
                     color=discord.Color.green(),
                     timestamp=current_time_for_embed
                 )
                 await channel.send(embed=embed)
+                logger.info(f"[PLP_SENT_JOIN] Embed de jugador unido para '{player}' enviado a canal '{channel.name}'.")
                 return
             except IndexError:
-                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar 'joined the game'. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                logger.error(f"[PLP_ERROR_JOIN_INDEX] IndexError. Grupos: {join_match.groups()}. Línea: {line[:100]}...", exc_info=True)
                 return
-        
-        match = self.log_patterns[2].search(line)
-        if match:
+            except Exception as e:
+                logger.error(f"[PLP_ERROR_JOIN_SEND] Excepción al enviar embed de jugador unido: {e}. Línea: {line[:100]}...", exc_info=True)
+                return
+
+        # Patrón de salir
+        leave_match = self.log_patterns[2].search(line)
+        if leave_match:
+            processed_by_a_pattern = True
             try:
-                player = match.group(1)
-                logger.info(f"[MinecraftCog] process_log_line: Jugador salido detectado - Jugador: '{player}'")
+                player = leave_match.group(1)
+                logger.info(f"[PLP_MATCH_LEAVE] Jugador: '{player}' (Línea: '{line[:100]}...')")
                 embed = discord.Embed(
                     description=f"❌ **{player.strip()}** salió del servidor.",
                     color=discord.Color.red(),
                     timestamp=current_time_for_embed
                 )
                 await channel.send(embed=embed)
+                logger.info(f"[PLP_SENT_LEAVE] Embed de jugador salido para '{player}' enviado a canal '{channel.name}'.")
                 return
             except IndexError:
-                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar 'left the game'. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                logger.error(f"[PLP_ERROR_LEAVE_INDEX] IndexError. Grupos: {leave_match.groups()}. Línea: {line[:100]}...", exc_info=True)
                 return
-        
-        match = self.log_patterns[3].search(line)
-        if match:
+            except Exception as e:
+                logger.error(f"[PLP_ERROR_LEAVE_SEND] Excepción al enviar embed de jugador salido: {e}. Línea: {line[:100]}...", exc_info=True)
+                return
+
+        # Patrón de muerte
+        death_match = self.log_patterns[3].search(line)
+        if death_match:
+            processed_by_a_pattern = True
             try:
-                death_message = match.group(1)
-                logger.info(f"[MinecraftCog] process_log_line: Muerte detectada - Mensaje: '{death_message}'")
+                death_message = death_match.group(1)
+                logger.info(f"[PLP_MATCH_DEATH] Mensaje: '{death_message}' (Línea: '{line[:100]}...')")
                 embed = discord.Embed(
                     description=f"💀 {death_message.strip()}",
                     color=discord.Color.dark_grey(),
                     timestamp=current_time_for_embed
                 )
                 await channel.send(embed=embed)
+                logger.info(f"[PLP_SENT_DEATH] Embed de muerte para '{death_message}' enviado a canal '{channel.name}'.")
                 return
             except IndexError:
-                logger.error(f"[MinecraftCog] process_log_line: IndexError al procesar muerte. Grupos: {match.groups()}. Línea: {line}", exc_info=True)
+                logger.error(f"[PLP_ERROR_DEATH_INDEX] IndexError. Grupos: {death_match.groups()}. Línea: {line[:100]}...", exc_info=True)
                 return
+            except Exception as e:
+                logger.error(f"[PLP_ERROR_DEATH_SEND] Excepción al enviar embed de muerte: {e}. Línea: {line[:100]}...", exc_info=True)
+                return
+
+        if not processed_by_a_pattern:
+            logger.info(f"[PLP_NO_MATCH] Línea no coincidió con ningún patrón principal: '{line[:200]}...'")
 
     async def get_server_status(self):
         logger.debug(f"[MinecraftCog] get_server_status: Intentando obtener estado para {self.server_ip}:{self.server_port}")
