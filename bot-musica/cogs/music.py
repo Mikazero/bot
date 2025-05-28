@@ -34,6 +34,18 @@ class Music(commands.Cog):
         ]
         await wavelink.Pool.connect(nodes=nodes, client=self.bot, cache_capacity=100)
         print("Conectado a los nodos de Lavalink")
+        
+        # Verificar la versión del servidor
+        try:
+            node = wavelink.Pool.get_node()
+            if node:
+                print(f"🔗 Servidor Lavalink: {node.uri}")
+                print(f"📊 Estado del nodo: {'Conectado' if node.status else 'Desconectado'}")
+                # Intentar obtener información del servidor
+                if hasattr(node, 'version'):
+                    print(f"🏷️ Versión de Lavalink: {node.version}")
+        except Exception as e:
+            print(f"⚠️ No se pudo obtener información del servidor: {e}")
 
     def get_queue(self, guild_id: int) -> list[wavelink.Playable]:
         """Obtiene la cola de reproducción del servidor"""
@@ -491,6 +503,36 @@ class Music(commands.Cog):
         ctx = await self.bot.get_context(mock_message)
         ctx.voice_client = interaction.guild.voice_client
         await self.queue_(ctx)
+
+    @commands.command(name="lavalink")
+    async def lavalink_info(self, ctx: commands.Context):
+        """Muestra información sobre el servidor Lavalink"""
+        try:
+            node = wavelink.Pool.get_node()
+            if not node:
+                await ctx.send("❌ No hay nodos de Lavalink conectados.")
+                return
+            
+            embed = discord.Embed(
+                title="🔗 Información de Lavalink",
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(name="🌐 URI", value=node.uri, inline=False)
+            embed.add_field(name="📊 Estado", value="🟢 Conectado" if node.status else "🔴 Desconectado", inline=True)
+            
+            if hasattr(node, 'version') and node.version:
+                embed.add_field(name="🏷️ Versión", value=node.version, inline=True)
+            else:
+                embed.add_field(name="🏷️ Versión", value="No disponible", inline=True)
+                
+            if hasattr(node, 'players'):
+                embed.add_field(name="🎵 Reproductores activos", value=len(node.players), inline=True)
+            
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            await ctx.send(f"❌ Error al obtener información de Lavalink: {e}")
 
     async def check_voice_state_loop(self):
         """Tarea de verificación periódica del estado de los canales de voz"""

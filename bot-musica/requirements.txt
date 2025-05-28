@@ -13,3 +13,4 @@ spotipy==2.23.0
 Flask==3.0.3 # Añadido para el health check de Heroku
 watchdog>=3.0.0
 requests # Asegurarse que requests esté, ya que es una dependencia común y pudo haberse eliminado por error.
+aiohttp>=3.8.0 
