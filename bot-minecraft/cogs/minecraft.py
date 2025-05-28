@@ -50,7 +50,7 @@ class MinecraftCog(commands.Cog):
             "experienced kinetic energy", "withered", "blew up", "blown up"
         ]
         death_regex_clauses = "|".join([re.escape(phrase) for phrase in self.death_core_phrases])
-        death_pattern_str = rf"\\[\\d{{2}}:\\d{{2}}:\\d{{2}}\\] \\[Server thread/INFO\\]: (\\w+\\s+(?:{death_regex_clauses}).*)"
+        death_pattern_str = rf"\[\d{{2}}:\d{{2}}:\d{{2}}\] \[Server thread/INFO\]: (\w+\s+(?:{death_regex_clauses}).*)"
 
         self.log_patterns = [
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)'),
@@ -128,7 +128,7 @@ class MinecraftCog(commands.Cog):
                 logger.error(f"[PLP_ERROR_JOIN_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
             self.processed_log_timestamps.add(log_identifier)
             return
-
+        
         # --- Intento de Patrón de Salir ---
         logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón LEAVE en línea: '{line[:100]}...'")
         leave_match = self.log_patterns[2].search(line)
@@ -154,6 +154,15 @@ class MinecraftCog(commands.Cog):
         try:
             logger.critical(f"[PLP_DEATH_DEBUG]   Patrón DEATH compilado: {self.log_patterns[3].pattern}")
             logger.critical(f"[PLP_DEATH_DEBUG]   Lista de core phrases en uso: {self.death_core_phrases}")
+            
+            # Prueba específica para líneas que contienen palabras clave de muerte
+            for phrase in self.death_core_phrases:
+                if phrase in line:
+                    logger.critical(f"[PLP_DEATH_DEBUG]   ¡Línea contiene frase clave '{phrase}'!")
+                    break
+            else:
+                logger.critical(f"[PLP_DEATH_DEBUG]   Línea NO contiene ninguna frase clave de muerte.")
+                
         except IndexError:
             logger.critical("[PLP_DEATH_DEBUG]   Error: self.log_patterns[3] no existe (IndexError).")
         except AttributeError:
@@ -161,6 +170,9 @@ class MinecraftCog(commands.Cog):
             
         logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón DEATH en línea: '{line[:100]}...'")
         death_match = self.log_patterns[3].search(line)
+        logger.critical(f"[PLP_DEATH_DEBUG]   Resultado de search(): {death_match}")
+        if death_match:
+            logger.critical(f"[PLP_DEATH_DEBUG]   Grupos encontrados: {death_match.groups()}")
         if death_match:
             try:
                 death_message = death_match.group(1)
@@ -686,7 +698,7 @@ class MinecraftCog(commands.Cog):
                 else:
                     await ctx_or_interaction.response.send_message(message, ephemeral=True)
         else:
-                await ctx_or_interaction.send(message, ephemeral=True)
+            await ctx_or_interaction.send(message, ephemeral=True)
 
     @tasks.loop(seconds=5)
     async def _remote_log_polling_loop(self):
