@@ -50,12 +50,12 @@ class MinecraftCog(commands.Cog):
             "experienced kinetic energy", "withered", "blew up", "blown up"
         ]
         death_regex_clauses = "|".join([re.escape(phrase) for phrase in self.death_core_phrases])
-        death_pattern_str = rf"\[\d{{2}}:\d{{2}}:\d{{2}}\] \[Server thread/INFO\]: (\w+\s+(?:{death_regex_clauses}).*)"
+        death_pattern_str = rf"\[\d{{2}}:\d{{2}}:\d{{2}}\] \[Server thread/INFO\]: ([^\s]+\s+(?:{death_regex_clauses}).*)"
 
         self.log_patterns = [
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) joined the game'),
-            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (\w+) left the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<([^>]+)> (.+)'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: ([^\s]+) joined the game'),
+            re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: ([^\s]+) left the game'),
             re.compile(death_pattern_str) # Patrón de muerte actualizado y más específico
         ]
         
