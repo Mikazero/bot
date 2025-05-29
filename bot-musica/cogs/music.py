@@ -12,8 +12,11 @@ class Music(commands.Cog):
         self.bot = bot
         self.bot.loop.create_task(self.connect_nodes())
         self.queues = {}
-        # Registrar manualmente el evento de wavelink
+        # Registrar manualmente los eventos de wavelink
         bot.add_listener(self.on_wavelink_track_end, "on_wavelink_track_end")
+        bot.add_listener(self.on_wavelink_track_start, "on_wavelink_track_start")
+        bot.add_listener(self.on_wavelink_websocket_closed, "on_wavelink_websocket_closed")
+        bot.add_listener(self.on_voice_state_update, "on_voice_state_update")
         # Diccionario para controlar temporizadores de desconexión
         self.disconnect_timers = {}
         # Iniciar la tarea de verificación periódica
@@ -108,6 +111,33 @@ class Music(commands.Cog):
                 except Exception as recovery_error:
                     print(f"Error durante la recuperación: {recovery_error}")
 
+    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
+        """Evento que se dispara cuando empieza una canción"""
+        print(f"[TRACK START] Canción iniciada: {payload.track.title}")
+        player = payload.player
+        if player and hasattr(player, 'text_channel') and player.text_channel:
+            print(f"[TRACK START] Player conectado a canal de voz: {player.channel.name if player.channel else 'Desconocido'}")
+
+    async def on_wavelink_websocket_closed(self, payload: wavelink.WebsocketClosedEventPayload):
+        """Evento que se dispara cuando se cierra la conexión WebSocket con Lavalink"""
+        print(f"[WEBSOCKET] Conexión cerrada - Código: {payload.code}, Razón: {payload.reason}, Por servidor remoto: {payload.by_remote}")
+        
+        if payload.player and hasattr(payload.player, 'text_channel') and payload.player.text_channel:
+            try:
+                await payload.player.text_channel.send(f"⚠️ Conexión con el servidor de música perdida (Código: {payload.code})")
+            except:
+                pass
+
+    async def on_voice_state_update(self, member, before, after):
+        """Evento que se dispara cuando cambia el estado de voz de un miembro"""
+        if member == self.bot.user:  # Solo nos interesa el bot
+            if before.channel and not after.channel:
+                print(f"[VOICE STATE] Bot desconectado de {before.channel.name}")
+            elif not before.channel and after.channel:
+                print(f"[VOICE STATE] Bot conectado a {after.channel.name}")
+            elif before.channel and after.channel and before.channel != after.channel:
+                print(f"[VOICE STATE] Bot movido de {before.channel.name} a {after.channel.name}")
+
     async def play_next(self, player: wavelink.Player):
         """Reproduce la siguiente canción en la cola"""
         guild_id = player.guild.id
@@ -164,6 +194,8 @@ class Music(commands.Cog):
 
     @commands.command(name="play")
     async def play_(self, ctx: commands.Context, *, search: str):
+        print(f"[PLAY DEBUG] Comando play recibido: {search}")
+        
         if not ctx.author.voice:
             await ctx.send("❌ Debes estar en un canal de voz para usar este comando.")
             return
@@ -171,29 +203,50 @@ class Music(commands.Cog):
         player: wavelink.Player
         if not ctx.voice_client:
             try:
+                print(f"[PLAY DEBUG] Conectando al canal de voz: {ctx.author.voice.channel.name}")
                 player = await ctx.author.voice.channel.connect(cls=wavelink.Player)
                 player.text_channel = ctx.channel  # Establecer el canal de texto al crear el player
+                print(f"[PLAY DEBUG] Conexión exitosa. Player: {player}")
             except Exception as e:
+                print(f"[PLAY ERROR] Error al conectar al canal de voz: {e}")
                 await ctx.send(f"❌ Error al conectar al canal de voz: {e}")
                 return
         else:
             player = ctx.voice_client
             player.text_channel = ctx.channel  # Actualizar el canal de texto si el player ya existe
+            print(f"[PLAY DEBUG] Usando player existente: {player}")
+
+        # Verificar estado del nodo Lavalink
+        try:
+            node = wavelink.Pool.get_node()
+            if not node or not node.status:
+                print(f"[PLAY ERROR] Nodo Lavalink no disponible. Estado: {node.status if node else 'None'}")
+                await ctx.send("❌ El servidor de música no está disponible. Inténtalo más tarde.")
+                return
+            print(f"[PLAY DEBUG] Nodo Lavalink OK: {node.uri}, Estado: {node.status}")
+        except Exception as e:
+            print(f"[PLAY ERROR] Error al verificar nodo Lavalink: {e}")
+            await ctx.send("❌ Error con el servidor de música.")
+            return
 
         embed_color = discord.Color.blue()
         embed = discord.Embed(title="⏳ Buscando...", description=f"Buscando: `{search}`", color=embed_color)
         msg = await ctx.send(embed=embed)
 
         try:
+            print(f"[PLAY DEBUG] Buscando: {search}")
             results: wavelink.Playlist | list[wavelink.Playable] | None = await wavelink.Playable.search(search)
+            print(f"[PLAY DEBUG] Resultados de búsqueda: {type(results)}, Cantidad: {len(results) if results else 0}")
             
             if not results:
+                print(f"[PLAY DEBUG] No se encontraron resultados para: {search}")
                 await msg.edit(embed=discord.Embed(title="❌ No se encontraron resultados.", description=f"No pude encontrar nada para: `{search}`", color=discord.Color.red()))
                 return
 
             queue = self.get_queue(ctx.guild.id)
 
             if isinstance(results, wavelink.Playlist):
+                print(f"[PLAY DEBUG] Procesando playlist: {results.name}")
                 playlist = results
                 if not playlist.tracks:
                     await msg.edit(embed=discord.Embed(title=f"❌ La playlist '{playlist.name}' está vacía o no se pudo cargar.", color=discord.Color.red()))
@@ -204,6 +257,7 @@ class Music(commands.Cog):
                 playlist_name = playlist.name if playlist.name else "Playlist sin nombre"
 
                 if player.current: # Player is busy
+                    print(f"[PLAY DEBUG] Player ocupado, añadiendo {num_tracks} canciones a la cola")
                     for track_in_playlist in tracks_from_playlist:
                         queue.append(track_in_playlist)
                     embed = discord.Embed(
@@ -214,7 +268,15 @@ class Music(commands.Cog):
                     await msg.edit(embed=embed)
                 else: # Player is idle, play first and queue rest
                     first_track = tracks_from_playlist[0]
-                    await player.play(first_track)
+                    print(f"[PLAY DEBUG] Player libre, reproduciendo: {first_track.title}")
+                    
+                    try:
+                        await player.play(first_track)
+                        print(f"[PLAY DEBUG] Reproducción iniciada exitosamente")
+                    except Exception as play_error:
+                        print(f"[PLAY ERROR] Error al reproducir: {play_error}")
+                        await msg.edit(embed=discord.Embed(title="❌ Error al reproducir", description=f"Error: {play_error}", color=discord.Color.red()))
+                        return
                     
                     desc = f"Empezando con: **{first_track.title}** ({self.format_time(first_track.length)})"
                     for track_in_playlist in tracks_from_playlist[1:]:
@@ -232,8 +294,10 @@ class Music(commands.Cog):
 
             elif isinstance(results, list): # List of Playable tracks
                 track: wavelink.Playable = results[0] # Take the first result
+                print(f"[PLAY DEBUG] Procesando canción individual: {track.title}")
                 
                 if player.current:
+                    print(f"[PLAY DEBUG] Player ocupado, añadiendo a la cola: {track.title}")
                     queue.append(track)
                     embed = discord.Embed(
                         title="🎵 Añadida a la cola",
@@ -242,7 +306,23 @@ class Music(commands.Cog):
                     )
                     await msg.edit(embed=embed)
                 else:
-                    await player.play(track)
+                    print(f"[PLAY DEBUG] Player libre, reproduciendo: {track.title}")
+                    try:
+                        await player.play(track)
+                        print(f"[PLAY DEBUG] Reproducción iniciada exitosamente")
+                        
+                        # Verificar inmediatamente si la reproducción comenzó
+                        await asyncio.sleep(1)
+                        if player.current:
+                            print(f"[PLAY DEBUG] Confirmado: player.current = {player.current.title}")
+                        else:
+                            print(f"[PLAY WARNING] player.current sigue siendo None después de 1 segundo")
+                            
+                    except Exception as play_error:
+                        print(f"[PLAY ERROR] Error al reproducir: {play_error}")
+                        await msg.edit(embed=discord.Embed(title="❌ Error al reproducir", description=f"Error: {play_error}", color=discord.Color.red()))
+                        return
+                        
                     embed = discord.Embed(
                         title="▶️ Reproduciendo",
                         description=f"**{track.title}**\nDuración: {self.format_time(track.length)}",
@@ -250,12 +330,15 @@ class Music(commands.Cog):
                     )
                     await msg.edit(embed=embed)
             else: 
+                print(f"[PLAY ERROR] Formato de resultado inesperado: {type(results)}")
                 await msg.edit(embed=discord.Embed(title="❌ Formato de resultado inesperado.", color=discord.Color.red()))
                 return
 
         except Exception as e:
+            print(f"[PLAY ERROR] Error general en play: {e}")
+            import traceback
+            traceback.print_exc()
             await msg.edit(embed=discord.Embed(title="❌ Error", description=f"Ocurrió un error: {str(e)}", color=discord.Color.red()))
-            print(f"Error en play: {e}")
 
     @commands.command(name="stop")
     async def stop_(self, ctx: commands.Context):
@@ -521,6 +604,7 @@ class Music(commands.Cog):
             embed.add_field(name="🌐 URI", value=node.uri, inline=False)
             embed.add_field(name="📊 Estado", value="🟢 Conectado" if node.status else "🔴 Desconectado", inline=True)
             
+            # Información detallada del servidor
             if hasattr(node, 'version') and node.version:
                 embed.add_field(name="🏷️ Versión", value=node.version, inline=True)
             else:
@@ -528,15 +612,43 @@ class Music(commands.Cog):
                 
             if hasattr(node, 'players'):
                 embed.add_field(name="🎵 Reproductores activos", value=len(node.players), inline=True)
+                
+            # Información adicional de conexión
+            embed.add_field(name="🔌 Estado de conexión", value=f"{'✅ Conectado' if node.status else '❌ Desconectado'}", inline=True)
+            
+            # Información del protocolo
+            try:
+                import wavelink
+                embed.add_field(name="📦 Wavelink versión", value=wavelink.__version__, inline=True)
+            except:
+                embed.add_field(name="📦 Wavelink versión", value="No disponible", inline=True)
+                
+            # Estadísticas del nodo si están disponibles
+            if hasattr(node, '_stats') and node._stats:
+                stats = node._stats
+                embed.add_field(name="💾 RAM usada", value=f"{stats.get('memory', {}).get('used', 'N/A')}", inline=True)
+                embed.add_field(name="🔧 CPU", value=f"{stats.get('cpu', {}).get('cores', 'N/A')} cores", inline=True)
+                embed.add_field(name="⏱️ Uptime", value=f"{stats.get('uptime', 'N/A')}ms", inline=True)
             
             await ctx.send(embed=embed)
             
+            # Información adicional en consola para debugging
+            print(f"[LAVALINK DEBUG] URI: {node.uri}")
+            print(f"[LAVALINK DEBUG] Estado: {'Conectado' if node.status else 'Desconectado'}")
+            print(f"[LAVALINK DEBUG] Atributos del nodo: {dir(node)}")
+            if hasattr(node, '_stats'):
+                print(f"[LAVALINK DEBUG] Estadísticas: {node._stats}")
+            
         except Exception as e:
             await ctx.send(f"❌ Error al obtener información de Lavalink: {e}")
+            print(f"[LAVALINK ERROR] {e}")
 
     async def check_voice_state_loop(self):
         """Tarea de verificación periódica del estado de los canales de voz"""
         await self.bot.wait_until_ready()
+        # Esperar 2 minutos adicionales después de que el bot esté listo para evitar desconexiones inmediatas
+        await asyncio.sleep(120)
+        
         try:
             while not self.bot.is_closed():
                 for guild in self.bot.guilds:
@@ -554,9 +666,12 @@ class Music(commands.Cog):
                     # Contar miembros humanos en el canal de voz
                     human_members = [m for m in channel.members if not m.bot]
                     
+                    print(f"[VOICE CHECK] Guild: {guild.name}, Humanos: {len(human_members)}, Reproduciendo: {player.current is not None}")
+                    
                     # Si está reproduciendo activamente música, resetear cualquier temporizador
                     if player.current:
                         if guild.id in self.disconnect_timers:
+                            print(f"[VOICE CHECK] Cancelando temporizador para {guild.name} - música activa")
                             # Cancelar temporizador si existe
                             self.disconnect_timers[guild.id].cancel()
                             self.disconnect_timers.pop(guild.id, None)
@@ -565,7 +680,7 @@ class Music(commands.Cog):
                     # Caso 1: Bot solo en el canal - esperar 5 minutos
                     if len(human_members) == 0:
                         if guild.id not in self.disconnect_timers:
-                            print(f"Bot solo en el canal de voz en {guild.name}. Programando desconexión en 5 minutos.")
+                            print(f"[VOICE CHECK] Bot solo en el canal de voz en {guild.name}. Programando desconexión en 5 minutos.")
                             self.disconnect_timers[guild.id] = self.bot.loop.create_task(
                                 self.disconnect_after(player, 5 * 60, guild.id)
                             )
@@ -573,17 +688,18 @@ class Music(commands.Cog):
                     # Caso 2: Bot con otros usuarios pero sin reproducir - esperar 15 minutos
                     elif not player.current:
                         if guild.id not in self.disconnect_timers:
-                            print(f"Bot inactivo con usuarios en el canal en {guild.name}. Programando desconexión en 15 minutos.")
+                            print(f"[VOICE CHECK] Bot inactivo con usuarios en el canal en {guild.name}. Programando desconexión en 15 minutos.")
                             self.disconnect_timers[guild.id] = self.bot.loop.create_task(
                                 self.disconnect_after(player, 15 * 60, guild.id)
                             )
                 
-                # Esperar 30 segundos antes de la próxima verificación
-                await asyncio.sleep(30)
+                # Esperar 60 segundos antes de la próxima verificación (aumentado de 30s)
+                await asyncio.sleep(60)
         except asyncio.CancelledError:
+            print("[VOICE CHECK] Tarea de verificación cancelada")
             pass
         except Exception as e:
-            print(f"Error en la tarea de verificación de canales de voz: {e}")
+            print(f"[VOICE CHECK] Error en la tarea de verificación de canales de voz: {e}")
 
     async def disconnect_after(self, player: wavelink.Player, seconds: int, guild_id: int):
         """Desconecta al bot después de un tiempo determinado si no se reanuda la reproducción"""

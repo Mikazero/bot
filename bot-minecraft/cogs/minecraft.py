@@ -68,10 +68,103 @@ class MinecraftCog(commands.Cog):
             logger.info(f"🔗 Configuración del API de logs: URL={self.mc_log_api_url}, Token={'*' * len(self.mc_log_api_token) if self.mc_log_api_token else 'No establecido'}")
 
         self.aiohttp_session = None
-        self.processed_log_timestamps = set()
+        
+        # Sistema de persistencia para logs procesados
+        self.processed_logs_file = "processed_logs.json"
+        self.processed_log_timestamps = self.load_processed_logs()
+        
         self.chat_bridge_active = False
         
         logger.info("[MinecraftCog] __init__ completado.")
+
+    def load_processed_logs(self):
+        """Carga los logs procesados desde el archivo de persistencia"""
+        try:
+            if os.path.exists(self.processed_logs_file):
+                with open(self.processed_logs_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Convertir la lista de vuelta a set para mejor rendimiento
+                    loaded_logs = set(data.get('processed_logs', []))
+                    logger.info(f"[PERSISTENCE] Cargados {len(loaded_logs)} logs procesados desde {self.processed_logs_file}")
+                    
+                    # Limpiar logs antiguos (más de 7 días) para evitar que el archivo crezca demasiado
+                    current_time = datetime.now()
+                    cleaned_logs = set()
+                    cleaned_count = 0
+                    
+                    for log_id in loaded_logs:
+                        # Intentar extraer timestamp del log_id
+                        try:
+                            if '-[' in log_id:  # Formato: "timestamp-[HH:MM:SS] log content"
+                                timestamp_part = log_id.split('-')[0]
+                                if timestamp_part.isdigit() and len(timestamp_part) >= 10:
+                                    log_time = datetime.fromtimestamp(int(timestamp_part))
+                                    age_days = (current_time - log_time).days
+                                    if age_days <= 7:  # Mantener logs de los últimos 7 días
+                                        cleaned_logs.add(log_id)
+                                    else:
+                                        cleaned_count += 1
+                                else:
+                                    # Si no podemos parsear el timestamp, mantener el log por seguridad
+                                    cleaned_logs.add(log_id)
+                            else:
+                                # Formato sin timestamp, mantener por seguridad
+                                cleaned_logs.add(log_id)
+                        except:
+                            # Si hay cualquier error parseando, mantener el log
+                            cleaned_logs.add(log_id)
+                    
+                    if cleaned_count > 0:
+                        logger.info(f"[PERSISTENCE] Limpiados {cleaned_count} logs antiguos (>7 días)")
+                        # Guardar la versión limpia inmediatamente
+                        self._save_processed_logs_sync(cleaned_logs)
+                    
+                    return cleaned_logs
+            else:
+                logger.info(f"[PERSISTENCE] Archivo {self.processed_logs_file} no existe, iniciando con set vacío")
+                return set()
+        except Exception as e:
+            logger.error(f"[PERSISTENCE] Error al cargar logs procesados: {e}", exc_info=True)
+            logger.warning("[PERSISTENCE] Iniciando con set vacío de logs procesados")
+            return set()
+
+    def _save_processed_logs_sync(self, logs_set):
+        """Versión síncrona para guardar logs procesados"""
+        try:
+            # Convertir set a lista para JSON y limitar a los últimos 10000 para evitar archivos muy grandes
+            logs_list = list(logs_set)
+            if len(logs_list) > 10000:
+                # Mantener solo los últimos 10000 logs
+                logs_list = logs_list[-10000:]
+                logger.warning(f"[PERSISTENCE] Limitando a 10000 logs más recientes (había {len(logs_set)})")
+            
+            data = {
+                'processed_logs': logs_list,
+                'last_updated': datetime.now().isoformat(),
+                'total_count': len(logs_list)
+            }
+            
+            # Escribir a un archivo temporal primero y luego renombrar para atomicidad
+            temp_file = f"{self.processed_logs_file}.tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # Renombrar el archivo temporal al archivo final
+            if os.path.exists(self.processed_logs_file):
+                os.remove(self.processed_logs_file)
+            os.rename(temp_file, self.processed_logs_file)
+            
+            logger.debug(f"[PERSISTENCE] Guardados {len(logs_list)} logs procesados en {self.processed_logs_file}")
+        except Exception as e:
+            logger.error(f"[PERSISTENCE] Error al guardar logs procesados: {e}", exc_info=True)
+
+    async def save_processed_logs(self):
+        """Guarda los logs procesados al archivo de persistencia de forma asíncrona"""
+        try:
+            # Ejecutar la operación de guardado en un thread separado para no bloquear
+            await asyncio.get_event_loop().run_in_executor(None, self._save_processed_logs_sync, self.processed_log_timestamps.copy())
+        except Exception as e:
+            logger.error(f"[PERSISTENCE] Error en guardado asíncrono: {e}", exc_info=True)
 
     async def process_log_line(self, line: str, timestamp_str: str = None):
         logger.info(f"[PLP_TRACE] Entrando a process_log_line. Línea: '{line[:100]}...', Timestamp_str: {timestamp_str}")
@@ -102,12 +195,15 @@ class MinecraftCog(commands.Cog):
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_CHAT] Embed CHAT para '{player}' enviado.")
                 self.processed_log_timestamps.add(log_identifier) # Marcada como procesada con éxito
+                # Guardar de forma asíncrona
+                asyncio.create_task(self.save_processed_logs())
                 return
             except IndexError:
                 logger.error(f"[PLP_ERROR_CHAT_INDEX] Grupos: {chat_match.groups()}. L: {line[:100]}...", exc_info=True)
             except Exception as e:
                 logger.error(f"[PLP_ERROR_CHAT_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
             self.processed_log_timestamps.add(log_identifier) # Marcada como procesada incluso si hubo error después del match
+            asyncio.create_task(self.save_processed_logs())
             return
         
         # --- Intento de Patrón de Unirse ---
@@ -121,12 +217,14 @@ class MinecraftCog(commands.Cog):
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_JOIN] Embed JOIN para '{player}' enviado.")
                 self.processed_log_timestamps.add(log_identifier)
+                asyncio.create_task(self.save_processed_logs())
                 return
             except IndexError:
                 logger.error(f"[PLP_ERROR_JOIN_INDEX] Grupos: {join_match.groups()}. L: {line[:100]}...", exc_info=True)
             except Exception as e:
                 logger.error(f"[PLP_ERROR_JOIN_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
             self.processed_log_timestamps.add(log_identifier)
+            asyncio.create_task(self.save_processed_logs())
             return
         
         # --- Intento de Patrón de Salir ---
@@ -140,12 +238,14 @@ class MinecraftCog(commands.Cog):
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_LEAVE] Embed LEAVE para '{player}' enviado.")
                 self.processed_log_timestamps.add(log_identifier)
+                asyncio.create_task(self.save_processed_logs())
                 return
             except IndexError:
                 logger.error(f"[PLP_ERROR_LEAVE_INDEX] Grupos: {leave_match.groups()}. L: {line[:100]}...", exc_info=True)
             except Exception as e:
                 logger.error(f"[PLP_ERROR_LEAVE_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
             self.processed_log_timestamps.add(log_identifier)
+            asyncio.create_task(self.save_processed_logs())
             return
 
         # --- Intento de Patrón de Muerte ---
@@ -181,16 +281,21 @@ class MinecraftCog(commands.Cog):
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_DEATH] Embed DEATH para '{death_message}' enviado.")
                 self.processed_log_timestamps.add(log_identifier)
+                asyncio.create_task(self.save_processed_logs())
                 return
             except IndexError:
                 logger.error(f"[PLP_ERROR_DEATH_INDEX] Grupos: {death_match.groups()}. L: {line[:100]}...", exc_info=True)
             except Exception as e:
                 logger.error(f"[PLP_ERROR_DEATH_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
             self.processed_log_timestamps.add(log_identifier)
+            asyncio.create_task(self.save_processed_logs())
             return
 
         logger.info(f"[PLP_NO_MATCH_ALL] Línea no coincidió con NINGÚN patrón: '{line[:200]}...'")
         self.processed_log_timestamps.add(log_identifier) # Marcar como procesada para no reintentar logs que no coinciden
+        # Para logs que no coinciden, guardamos pero con menos frecuencia para no saturar el disco
+        if len(self.processed_log_timestamps) % 10 == 0:  # Guardar cada 10 logs no coincidentes
+            asyncio.create_task(self.save_processed_logs())
 
     async def get_server_status(self):
         logger.debug(f"[MinecraftCog] get_server_status: Intentando obtener estado para {self.server_ip}:{self.server_port}")
@@ -212,12 +317,20 @@ class MinecraftCog(commands.Cog):
         try:
             def rcon_blocking_call():
                 logger.debug(f"[MinecraftCog] rcon_blocking_call: Conectando a {self.server_ip}:{self.rcon_port} para comando '{command}'")
-                with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
-                    response = mcr.command(command)
-                    logger.debug(f"[MinecraftCog] rcon_blocking_call: Comando '{command}' ejecutado, respuesta: '{response[:100]}...'")
-                    return response
+                try:
+                    with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
+                        response = mcr.command(command)
+                        logger.debug(f"[MinecraftCog] rcon_blocking_call: Comando '{command}' ejecutado, respuesta: '{response[:100]}...'")
+                        return response
+                except Exception as e:
+                    logger.error(f"[MinecraftCog] rcon_blocking_call: Error en thread RCON: {e}")
+                    raise e
             
-            response = await asyncio.to_thread(rcon_blocking_call)
+            # Usar ThreadPoolExecutor en lugar de asyncio.to_thread para evitar problemas de señales
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                response = await loop.run_in_executor(executor, rcon_blocking_call)
             return response
         except Exception as e:
             logger.error(f"[MinecraftCog] execute_rcon_command: Error detallado ejecutando comando RCON '{command}':", exc_info=True)
@@ -647,6 +760,14 @@ class MinecraftCog(commands.Cog):
             self._remote_log_polling_loop.cancel()
             logger.info("[MinecraftCog] Tarea de polling de logs remotos cancelada.")
         
+        # Guardar logs procesados antes de descargar
+        try:
+            logger.info("[MinecraftCog] Guardando logs procesados antes de descargar...")
+            self._save_processed_logs_sync(self.processed_log_timestamps)
+            logger.info(f"[MinecraftCog] Guardados {len(self.processed_log_timestamps)} logs procesados")
+        except Exception as e:
+            logger.error(f"[MinecraftCog] Error al guardar logs procesados durante descarga: {e}", exc_info=True)
+        
         if hasattr(self, 'aiohttp_session') and self.aiohttp_session and not self.aiohttp_session.closed:
             try:
                 asyncio.create_task(self.aiohttp_session.close())
@@ -657,6 +778,83 @@ class MinecraftCog(commands.Cog):
             logger.info("[MinecraftCog] No se encontró sesión aiohttp activa para cerrar o ya estaba cerrada.")
         
         logger.info("[MinecraftCog] MinecraftCog descargado.")
+
+    @commands.command(name="mclogs", help="Gestiona la persistencia de logs. Uso: m.mclogs <info|clear|save>")
+    async def text_minecraft_logs_management(self, ctx: commands.Context, action: str = "info"):
+        """Gestiona el sistema de persistencia de logs procesados"""
+        action = action.lower()
+        
+        if action == "info":
+            # Mostrar información sobre logs procesados
+            total_logs = len(self.processed_log_timestamps)
+            file_exists = os.path.exists(self.processed_logs_file)
+            file_size = 0
+            file_date = "N/A"
+            
+            if file_exists:
+                try:
+                    file_size = os.path.getsize(self.processed_logs_file)
+                    file_date = datetime.fromtimestamp(os.path.getmtime(self.processed_logs_file)).strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    pass
+            
+            embed = discord.Embed(title="📊 Información de Logs Procesados", color=discord.Color.blue())
+            embed.add_field(name="🔢 Logs en memoria", value=str(total_logs), inline=True)
+            embed.add_field(name="📁 Archivo existe", value="✅ Sí" if file_exists else "❌ No", inline=True)
+            embed.add_field(name="📏 Tamaño archivo", value=f"{file_size:,} bytes" if file_exists else "N/A", inline=True)
+            embed.add_field(name="📅 Última modificación", value=file_date, inline=False)
+            embed.add_field(name="📂 Ruta archivo", value=f"`{self.processed_logs_file}`", inline=False)
+            
+            await ctx.send(embed=embed)
+            
+        elif action == "clear":
+            # Limpiar logs procesados (solo administradores)
+            if not ctx.author.guild_permissions.administrator:
+                await ctx.send("❌ Solo los administradores pueden limpiar los logs procesados.")
+                return
+                
+            # Solicitar confirmación
+            confirm_msg = await ctx.send("⚠️ **¿Estás seguro de que quieres limpiar todos los logs procesados?**\n"
+                                       "Esto significa que el bot volverá a procesar todos los logs del servidor la próxima vez que se reinicie.\n"
+                                       "Reacciona con ✅ para confirmar o ❌ para cancelar.")
+            await confirm_msg.add_reaction("✅")
+            await confirm_msg.add_reaction("❌")
+            
+            def check(reaction, user):
+                return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == confirm_msg.id
+            
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+                if str(reaction.emoji) == "✅":
+                    # Limpiar logs
+                    old_count = len(self.processed_log_timestamps)
+                    self.processed_log_timestamps.clear()
+                    
+                    # Eliminar archivo de persistencia
+                    try:
+                        if os.path.exists(self.processed_logs_file):
+                            os.remove(self.processed_logs_file)
+                        await ctx.send(f"✅ Limpiados {old_count} logs procesados y eliminado archivo de persistencia.")
+                        logger.info(f"[LOGS MANAGEMENT] Usuario {ctx.author} limpió {old_count} logs procesados")
+                    except Exception as e:
+                        await ctx.send(f"⚠️ Logs en memoria limpiados pero error al eliminar archivo: {e}")
+                else:
+                    await ctx.send("❌ Operación cancelada.")
+            except asyncio.TimeoutError:
+                await ctx.send("⏰ Tiempo agotado. Operación cancelada.")
+                
+        elif action == "save":
+            # Forzar guardado manual
+            try:
+                await self.save_processed_logs()
+                await ctx.send(f"✅ Guardados {len(self.processed_log_timestamps)} logs procesados en `{self.processed_logs_file}`")
+                logger.info(f"[LOGS MANAGEMENT] Usuario {ctx.author} forzó guardado de logs")
+            except Exception as e:
+                await ctx.send(f"❌ Error al guardar logs: {e}")
+                logger.error(f"[LOGS MANAGEMENT] Error en guardado manual: {e}", exc_info=True)
+                
+        else:
+            await ctx.send("❌ Acción inválida. Acciones disponibles: `info`, `clear`, `save`")
 
     def is_allowed_guild(self, ctx_or_interaction) -> bool:
         if not self.allowed_guild_id: return True
@@ -726,76 +924,56 @@ class MinecraftCog(commands.Cog):
             "User-Agent": "DiscordBot-MinecraftCog/1.0"
         }
         full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs"
-        logger.info(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {full_url}")
+        logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {full_url}")
 
         try:
             async with self.aiohttp_session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                logger.info(f"[MinecraftCog] _remote_log_polling_loop: Respuesta recibida del API: Status {response.status}")
+                logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Respuesta recibida del API: Status {response.status}")
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"[MinecraftCog] Respuesta JSON del API de logs: {data}") 
-                    new_lines = data.get("new_lines", []) 
+                    
+                    # Información del servidor optimizado
+                    client_id = data.get("client_id", "unknown")
+                    total_new_lines = data.get("total_new_lines", 0)
+                    is_first_request = data.get("is_first_request", False)
+                    last_line_processed = data.get("last_line_processed", 0)
+                    
+                    logger.info(f"[MinecraftCog] Cliente: {client_id}, Nuevas líneas: {total_new_lines}, Primera petición: {is_first_request}, Última línea procesada: {last_line_processed}")
+                    
+                    new_lines = data.get("new_lines", [])
                     if new_lines:
                         logger.info(f"[MinecraftCog] _remote_log_polling_loop: {len(new_lines)} nuevas líneas recibidas. Procesando...")
-                        for item in new_lines: 
+                        
+                        # Procesar cada línea nueva con el formato optimizado
+                        for item in new_lines:
                             line_to_process = None
                             timestamp_for_line = None
-                            if isinstance(item, str):
-                                line_to_process = item
-                            elif isinstance(item, dict): 
-                                line_to_process = item.get("line")
+                            line_number = None
+                            
+                            if isinstance(item, dict):
+                                # Nuevo formato optimizado del servidor
+                                line_to_process = item.get("content")  # Campo 'content' en lugar de 'line'
                                 timestamp_for_line = item.get("timestamp")
-
-                            # ---- BLOQUE DE DEBUG ESPECÍFICO ----
-                            test_line = "<Stalker_w> hola" 
-                            if line_to_process and test_line in line_to_process:
-                                logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                                logger.critical(f"[DEBUG_REGEX] Detectada línea de prueba: '{line_to_process}'")
-                                logger.critical(f"[DEBUG_REGEX]   - repr(line_to_process): {repr(line_to_process)}")
-                                
-                                # Prueba 1: Usando el patrón precompilado del cog
-                                logger.critical(f"[DEBUG_REGEX] --- Prueba con self.log_patterns[0] ({self.log_patterns[0].pattern}) ---")
-                                match_cog_pattern = self.log_patterns[0].search(line_to_process)
-                                if match_cog_pattern:
-                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (self.log_patterns[0].search)!")
-                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_cog_pattern.group(1)}', G2: '{match_cog_pattern.group(2)}'")
-                                else:
-                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (self.log_patterns[0].search)")
-
-                                # Prueba 2: Recompilando con anclas ^ y $
-                                chat_pattern_anchored = re.compile(r'^\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<(\w+)> (.+)$')
-                                logger.critical(f"[DEBUG_REGEX] --- Prueba con patrón anclado ({chat_pattern_anchored.pattern}) ---")
-                                match_anchored_search = chat_pattern_anchored.search(line_to_process)
-                                if match_anchored_search:
-                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (anclado .search)!")
-                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_anchored_search.group(1)}', G2: '{match_anchored_search.group(2)}'")
-                                else:
-                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (anclado .search)")
-                                
-                                match_anchored_match = chat_pattern_anchored.match(line_to_process)
-                                if match_anchored_match:
-                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (anclado .match)!")
-                                    logger.critical(f"[DEBUG_REGEX]     - G1: '{match_anchored_match.group(1)}', G2: '{match_anchored_match.group(2)}'")
-                                else:
-                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (anclado .match)")
-
-                                # Prueba 3: Prueba de subcadena simple
-                                simple_substring_pattern = re.compile(re.escape("<Stalker_w> hola"))
-                                logger.critical(f"[DEBUG_REGEX] --- Prueba con subcadena simple ({simple_substring_pattern.pattern}) ---")
-                                match_simple_substring = simple_substring_pattern.search(line_to_process)
-                                if match_simple_substring:
-                                    logger.critical(f"[DEBUG_REGEX]   - ¡COINCIDENCIA (subcadena simple .search)!")
-                                else:
-                                    logger.critical(f"[DEBUG_REGEX]   - NO HAY COINCIDENCIA (subcadena simple .search)")
-
-                                logger.critical(f"[DEBUG_REGEX]   - Línea como bytes: {line_to_process.encode('utf-8', 'backslashreplace')}")
-                                logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                            # ---- FIN BLOQUE DE DEBUG ESPECÍFICO ----
-
+                                line_number = item.get("line_number")
+                            elif isinstance(item, str):
+                                # Formato antiguo para compatibilidad hacia atrás
+                                line_to_process = item
+                            
                             if line_to_process:
-                                await self.process_log_line(line_to_process, timestamp_for_line)
+                                # Crear identificador único usando line_number si está disponible
+                                if line_number:
+                                    log_identifier = f"{line_number}-{line_to_process}"
+                                else:
+                                    log_identifier = f"{timestamp_for_line}-{line_to_process}" if timestamp_for_line else line_to_process
+                                
+                                # Solo procesar si no la hemos visto antes
+                                if log_identifier not in self.processed_log_timestamps:
+                                    await self.process_log_line(line_to_process, timestamp_for_line)
+                                else:
+                                    logger.debug(f"[MinecraftCog] Línea ya procesada localmente, saltando: {line_to_process[:50]}...")
                     else:
                         logger.debug("[MinecraftCog] _remote_log_polling_loop: No hay nuevas líneas en la respuesta.")
+                        
                 elif response.status == 401:
                     logger.error(f"Error 401 (No Autorizado) con el API de logs ({full_url}). Verifica MC_LOG_API_TOKEN. Desactivando bridge.")
                     self.chat_bridge_active = False
