@@ -13,6 +13,7 @@ import re
 import logging
 from typing import Union
 import concurrent.futures
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,12 @@ class MinecraftCog(commands.Cog):
         # Sistema de persistencia para logs procesados
         self.processed_logs_file = "processed_logs.json"
         self.processed_log_timestamps = self.load_processed_logs()
+        
+        # Variables para el control de logs
+        self.client_id = str(uuid.uuid4())[:12]  # Identificador único para este cliente
+        self.last_processed_timestamp = None
+        self.first_request = True
+        self.last_line_number = 0
         
         self.chat_bridge_active = False
         
@@ -846,100 +853,61 @@ class MinecraftCog(commands.Cog):
 
     @tasks.loop(seconds=5)
     async def _remote_log_polling_loop(self):
-        logger.info(f"[MinecraftCog] Inicio de ciclo _remote_log_polling_loop. chat_bridge_active={self.chat_bridge_active}")
-        if not self.chat_bridge_active:
-            logger.debug("[MinecraftCog] _remote_log_polling_loop: Saliendo porque chat_bridge_active es False.")
-            return
-
-        if not self.mc_log_api_url or not self.mc_log_api_token:
-            logger.warning("[MinecraftCog] _remote_log_polling_loop: Saliendo porque MC_LOG_API_URL o MC_LOG_API_TOKEN no están configurados.")
-            return
-
-        logger.debug("[MinecraftCog] _remote_log_polling_loop: Verificando sesión aiohttp.")
-        if not self.aiohttp_session or self.aiohttp_session.closed:
-            logger.warning("[MinecraftCog] _remote_log_polling_loop: Sesión aiohttp no disponible o cerrada. Recreando...")
-            try:
-                self.aiohttp_session = aiohttp.ClientSession()
-                logger.info("[MinecraftCog] _remote_log_polling_loop: Sesión aiohttp recreada en polling task.")
-            except Exception as e:
-                logger.error(f"[MinecraftCog] _remote_log_polling_loop: No se pudo recrear la sesión aiohttp: {e}. Saltando ciclo.", exc_info=True)
-                return
-        
-        headers = {
-            "Authorization": f"Bearer {self.mc_log_api_token}", 
-            "User-Agent": "DiscordBot-MinecraftCog/1.0"
-        }
-        full_url = f"{self.mc_log_api_url.rstrip('/')}/get_new_logs"
-        logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {full_url}")
-
+        """Loop principal para obtener y procesar nuevos logs del servidor remoto"""
         try:
-            async with self.aiohttp_session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if not self.chat_bridge_active:
+                return
+
+            logger.info("[MinecraftCog] Inicio de ciclo _remote_log_polling_loop. chat_bridge_active=True")
+            
+            # Verificar sesión HTTP
+            logger.debug("[MinecraftCog] _remote_log_polling_loop: Verificando sesión aiohttp.")
+            if not self.aiohttp_session:
+                self.aiohttp_session = aiohttp.ClientSession()
+
+            # Preparar parámetros de la petición
+            params = {
+                'client_id': self.client_id,
+                'last_timestamp': self.last_processed_timestamp
+            }
+
+            # Hacer petición al servidor
+            logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {self.log_server_url}")
+            async with self.aiohttp_session.get(f"{self.log_server_url}/get_new_logs", params=params) as response:
                 logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Respuesta recibida del API: Status {response.status}")
+                
                 if response.status == 200:
                     data = await response.json()
+                    new_lines = data.get('lines', [])
+                    current_timestamp = data.get('current_timestamp')
                     
-                    # Información del servidor optimizado
-                    client_id = data.get("client_id", "unknown")
-                    total_new_lines = data.get("total_new_lines", 0)
-                    is_first_request = data.get("is_first_request", False)
-                    last_line_processed = data.get("last_line_processed", 0)
+                    logger.info(f"[MinecraftCog] Cliente: {self.client_id}, Nuevas líneas: {len(new_lines)}, Primera petición: {self.first_request}, Última línea procesada: {self.last_line_number}")
                     
-                    logger.info(f"[MinecraftCog] Cliente: {client_id}, Nuevas líneas: {total_new_lines}, Primera petición: {is_first_request}, Última línea procesada: {last_line_processed}")
-                    
-                    new_lines = data.get("new_lines", [])
-                    if new_lines:
-                        logger.info(f"[MinecraftCog] _remote_log_polling_loop: {len(new_lines)} nuevas líneas recibidas. Procesando...")
-                        
-                        # Procesar cada línea nueva con el formato optimizado
-                        for item in new_lines:
-                            line_to_process = None
-                            timestamp_for_line = None
-                            line_number = None
-                            
-                            if isinstance(item, dict):
-                                # Nuevo formato optimizado del servidor
-                                line_to_process = item.get("content")  # Campo 'content' en lugar de 'line'
-                                timestamp_for_line = item.get("timestamp")
-                                line_number = item.get("line_number")
-                            elif isinstance(item, str):
-                                # Formato antiguo para compatibilidad hacia atrás
-                                line_to_process = item
-                            
-                            if line_to_process:
-                                # Crear identificador único usando line_number si está disponible
-                                if line_number:
-                                    log_identifier = f"{line_number}-{line_to_process}"
-                                else:
-                                    log_identifier = f"{timestamp_for_line}-{line_to_process}" if timestamp_for_line else line_to_process
-                                
-                                # Solo procesar si no la hemos visto antes
-                                if log_identifier not in self.processed_log_timestamps:
-                                    await self.process_log_line(line_to_process, timestamp_for_line)
-                                else:
-                                    logger.debug(f"[MinecraftCog] Línea ya procesada localmente, saltando: {line_to_process[:50]}...")
-                    else:
+                    if not new_lines:
                         logger.debug("[MinecraftCog] _remote_log_polling_loop: No hay nuevas líneas en la respuesta.")
+                        return
+
+                    # Procesar cada línea nueva
+                    for line_data in new_lines:
+                        line = line_data.get('content', '')
+                        timestamp = line_data.get('timestamp')
                         
+                        if timestamp and line:
+                            await self.process_log_line(line, timestamp)
+                            self.last_processed_timestamp = timestamp
+                    
+                    self.first_request = False
+                    
                 elif response.status == 401:
-                    logger.error(f"Error 401 (No Autorizado) con el API de logs ({full_url}). Verifica MC_LOG_API_TOKEN. Desactivando bridge.")
+                    logger.error("[MinecraftCog] Error de autenticación con el servidor de logs.")
                     self.chat_bridge_active = False
-                elif response.status == 403:
-                    logger.error(f"Error 403 (Prohibido) con el API de logs ({full_url}). Token inválido o sin permisos. Desactivando bridge.")
-                    self.chat_bridge_active = False
-                elif response.status == 404:
-                    logger.error(f"Error 404 (No Encontrado) con el API de logs: {full_url}. Verifica el endpoint en el API y en el bot.")
                 else:
-                    error_text = await response.text()
-                    logger.error(f"Error al contactar el API de logs ({full_url}): {response.status} - {error_text[:200]}")
-        except aiohttp.ClientConnectorError as e:
-            logger.error(f"Error de conexión al API de logs: {e}. URL: {full_url}")
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout al conectar con el API de logs en {full_url}.")
-        except json.JSONDecodeError:
-            raw_text = await response.text()
-            logger.error(f"Error al decodificar JSON del API de logs ({full_url}). Respuesta: {raw_text[:200]}")
+                    logger.error(f"[MinecraftCog] Error {response.status} al obtener logs del servidor.")
+
+        except aiohttp.ClientError as e:
+            logger.error(f"[MinecraftCog] Error de conexión con el servidor de logs: {e}", exc_info=True)
         except Exception as e:
-            logger.error(f"Excepción inesperada en _remote_log_polling_loop: {e.__class__.__name__} - {e}", exc_info=True)
+            logger.error(f"[MinecraftCog] Error inesperado en _remote_log_polling_loop: {e}", exc_info=True)
 
     @_remote_log_polling_loop.before_loop
     async def before_remote_log_polling(self):
