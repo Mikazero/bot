@@ -871,9 +871,12 @@ class MinecraftCog(commands.Cog):
 
             # Preparar parámetros de la petición
             params = {
-                'client_id': self.client_id,
-                'last_timestamp': self.last_processed_timestamp
+                'client_id': self.client_id
             }
+            
+            # Solo agregar last_timestamp si no es None
+            if self.last_processed_timestamp is not None:
+                params['last_timestamp'] = str(self.last_processed_timestamp)
 
             # Hacer petición al servidor
             logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {self.log_server_url}")
