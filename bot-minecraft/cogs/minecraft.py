@@ -58,7 +58,7 @@ class MinecraftCog(commands.Cog):
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: (?:\[Not Secure\] )?<([^>]+)> (.+)'),
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: ([^\s]+) joined the game'),
             re.compile(r'\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: ([^\s]+) left the game'),
-            re.compile(death_pattern_str) # Patrón de muerte actualizado y más específico
+            re.compile(death_pattern_str)
         ]
         
         self.mc_log_api_url = os.environ.get("MC_LOG_API_URL")
@@ -71,10 +71,6 @@ class MinecraftCog(commands.Cog):
 
         self.aiohttp_session = None
         
-        # Sistema de persistencia para logs procesados
-        self.processed_logs_file = "processed_logs.json"
-        self.processed_log_timestamps = self.load_processed_logs()
-        
         # Variables para el control de logs
         self.client_id = str(uuid.uuid4())[:12]  # Identificador único para este cliente
         self.last_processed_timestamp = None
@@ -86,6 +82,10 @@ class MinecraftCog(commands.Cog):
         self.log_server_token = os.getenv('MC_LOG_API_TOKEN')
         
         self.chat_bridge_active = False
+        
+        # Sistema de persistencia para logs procesados
+        self.processed_logs_file = "processed_logs.json"
+        self.processed_log_timestamps = self.load_processed_logs()
         
         logger.info("[MinecraftCog] __init__ completado.")
 
@@ -874,8 +874,8 @@ class MinecraftCog(commands.Cog):
                 'client_id': self.client_id
             }
             
-            # Solo agregar last_timestamp si no es None
-            if self.last_processed_timestamp is not None:
+            # Solo agregar last_timestamp si no es None y no es primera petición
+            if self.last_processed_timestamp is not None and not self.first_request:
                 params['last_timestamp'] = str(self.last_processed_timestamp)
 
             # Hacer petición al servidor
@@ -904,7 +904,9 @@ class MinecraftCog(commands.Cog):
                             await self.process_log_line(line, timestamp)
                             self.last_processed_timestamp = timestamp
                     
-                    self.first_request = False
+                    # Marcar que ya no es primera petición después de procesar líneas
+                    if self.first_request:
+                        self.first_request = False
                     
                 elif response.status == 401:
                     logger.error("[MinecraftCog] Error de autenticación con el servidor de logs.")
