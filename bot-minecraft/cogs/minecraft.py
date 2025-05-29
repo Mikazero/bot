@@ -81,6 +81,10 @@ class MinecraftCog(commands.Cog):
         self.first_request = True
         self.last_line_number = 0
         
+        # Configuración del servidor de logs
+        self.log_server_url = os.getenv('MC_LOG_API_URL', 'http://4.155.142.222:5555')
+        self.log_server_token = os.getenv('MC_LOG_API_TOKEN')
+        
         self.chat_bridge_active = False
         
         logger.info("[MinecraftCog] __init__ completado.")
@@ -873,7 +877,8 @@ class MinecraftCog(commands.Cog):
 
             # Hacer petición al servidor
             logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Haciendo petición GET a {self.log_server_url}")
-            async with self.aiohttp_session.get(f"{self.log_server_url}/get_new_logs", params=params) as response:
+            headers = {'Authorization': f'Bearer {self.log_server_token}'} if self.log_server_token else {}
+            async with self.aiohttp_session.get(f"{self.log_server_url}/get_new_logs", params=params, headers=headers) as response:
                 logger.debug(f"[MinecraftCog] _remote_log_polling_loop: Respuesta recibida del API: Status {response.status}")
                 
                 if response.status == 200:
