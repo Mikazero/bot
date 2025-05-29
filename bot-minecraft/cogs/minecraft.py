@@ -145,15 +145,9 @@ class MinecraftCog(commands.Cog):
                 'total_count': len(logs_list)
             }
             
-            # Escribir a un archivo temporal primero y luego renombrar para atomicidad
-            temp_file = f"{self.processed_logs_file}.tmp"
-            with open(temp_file, 'w', encoding='utf-8') as f:
+            # Escribir directamente al archivo final sin usar archivo temporal
+            with open(self.processed_logs_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            # Renombrar el archivo temporal al archivo final
-            if os.path.exists(self.processed_logs_file):
-                os.remove(self.processed_logs_file)
-            os.rename(temp_file, self.processed_logs_file)
             
             logger.debug(f"[PERSISTENCE] Guardados {len(logs_list)} logs procesados en {self.processed_logs_file}")
         except Exception as e:
@@ -180,123 +174,69 @@ class MinecraftCog(commands.Cog):
             logger.info(f"[PLP_SKIP] Línea ya procesada (ID: '{log_identifier[:100]}...'). Saltando: '{line[:100]}...'")
             return
             
-        # Intentaremos procesar. Si ningún patrón útil coincide, la marcaremos como procesada al final.
-
+        # Marcar como procesada inmediatamente para evitar duplicaciones
+        self.processed_log_timestamps.add(log_identifier)
+        
         current_time_for_embed = datetime.now()
 
-        # --- Intento de Patrón de Chat ---
-        logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón CHAT en línea: '{line[:100]}...'")
-        chat_match = self.log_patterns[0].search(line)
-        if chat_match:
-            try:
+        try:
+            # --- Intento de Patrón de Chat ---
+            logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón CHAT en línea: '{line[:100]}...'")
+            chat_match = self.log_patterns[0].search(line)
+            if chat_match:
                 player = chat_match.group(1)
                 message = chat_match.group(2)
                 logger.info(f"[PLP_MATCH_CHAT] J: '{player}', M: '{message}' (L: '{line[:100]}...')")
                 embed = discord.Embed(description=f"💬 **{player.strip()}**: {message.strip()}", color=discord.Color.blue(), timestamp=current_time_for_embed)
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_CHAT] Embed CHAT para '{player}' enviado.")
-                self.processed_log_timestamps.add(log_identifier) # Marcada como procesada con éxito
-                # Guardar de forma asíncrona
-                asyncio.create_task(self.save_processed_logs())
+                await self.save_processed_logs()
                 return
-            except IndexError:
-                logger.error(f"[PLP_ERROR_CHAT_INDEX] Grupos: {chat_match.groups()}. L: {line[:100]}...", exc_info=True)
-            except Exception as e:
-                logger.error(f"[PLP_ERROR_CHAT_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
-            self.processed_log_timestamps.add(log_identifier) # Marcada como procesada incluso si hubo error después del match
-            asyncio.create_task(self.save_processed_logs())
-            return
-        
-        # --- Intento de Patrón de Unirse ---
-        logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón JOIN en línea: '{line[:100]}...'")
-        join_match = self.log_patterns[1].search(line)
-        if join_match:
-            try:
+
+            # --- Intento de Patrón de Unirse ---
+            logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón JOIN en línea: '{line[:100]}...'")
+            join_match = self.log_patterns[1].search(line)
+            if join_match:
                 player = join_match.group(1)
                 logger.info(f"[PLP_MATCH_JOIN] J: '{player}' (L: '{line[:100]}...')")
                 embed = discord.Embed(description=f"✅ **{player.strip()}** se unió.", color=discord.Color.green(), timestamp=current_time_for_embed)
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_JOIN] Embed JOIN para '{player}' enviado.")
-                self.processed_log_timestamps.add(log_identifier)
-                asyncio.create_task(self.save_processed_logs())
+                await self.save_processed_logs()
                 return
-            except IndexError:
-                logger.error(f"[PLP_ERROR_JOIN_INDEX] Grupos: {join_match.groups()}. L: {line[:100]}...", exc_info=True)
-            except Exception as e:
-                logger.error(f"[PLP_ERROR_JOIN_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
-            self.processed_log_timestamps.add(log_identifier)
-            asyncio.create_task(self.save_processed_logs())
-            return
-        
-        # --- Intento de Patrón de Salir ---
-        logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón LEAVE en línea: '{line[:100]}...'")
-        leave_match = self.log_patterns[2].search(line)
-        if leave_match:
-            try:
+
+            # --- Intento de Patrón de Salir ---
+            logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón LEAVE en línea: '{line[:100]}...'")
+            leave_match = self.log_patterns[2].search(line)
+            if leave_match:
                 player = leave_match.group(1)
                 logger.info(f"[PLP_MATCH_LEAVE] J: '{player}' (L: '{line[:100]}...')")
                 embed = discord.Embed(description=f"❌ **{player.strip()}** salió.", color=discord.Color.red(), timestamp=current_time_for_embed)
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_LEAVE] Embed LEAVE para '{player}' enviado.")
-                self.processed_log_timestamps.add(log_identifier)
-                asyncio.create_task(self.save_processed_logs())
+                await self.save_processed_logs()
                 return
-            except IndexError:
-                logger.error(f"[PLP_ERROR_LEAVE_INDEX] Grupos: {leave_match.groups()}. L: {line[:100]}...", exc_info=True)
-            except Exception as e:
-                logger.error(f"[PLP_ERROR_LEAVE_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
-            self.processed_log_timestamps.add(log_identifier)
-            asyncio.create_task(self.save_processed_logs())
-            return
 
-        # --- Intento de Patrón de Muerte ---
-        # Logs de depuración adicionales para el patrón de muerte
-        logger.critical(f"[PLP_DEATH_DEBUG] Para línea: {repr(line)}")
-        try:
-            logger.critical(f"[PLP_DEATH_DEBUG]   Patrón DEATH compilado: {self.log_patterns[3].pattern}")
-            logger.critical(f"[PLP_DEATH_DEBUG]   Lista de core phrases en uso: {self.death_core_phrases}")
-            
-            # Prueba específica para líneas que contienen palabras clave de muerte
-            for phrase in self.death_core_phrases:
-                if phrase in line:
-                    logger.critical(f"[PLP_DEATH_DEBUG]   ¡Línea contiene frase clave '{phrase}'!")
-                    break
-            else:
-                logger.critical(f"[PLP_DEATH_DEBUG]   Línea NO contiene ninguna frase clave de muerte.")
-                
-        except IndexError:
-            logger.critical("[PLP_DEATH_DEBUG]   Error: self.log_patterns[3] no existe (IndexError).")
-        except AttributeError:
-            logger.critical("[PLP_DEATH_DEBUG]   Error: self.log_patterns[3] no es un objeto regex compilado (AttributeError).")
-            
-        logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón DEATH en línea: '{line[:100]}...'")
-        death_match = self.log_patterns[3].search(line)
-        logger.critical(f"[PLP_DEATH_DEBUG]   Resultado de search(): {death_match}")
-        if death_match:
-            logger.critical(f"[PLP_DEATH_DEBUG]   Grupos encontrados: {death_match.groups()}")
-        if death_match:
-            try:
+            # --- Intento de Patrón de Muerte ---
+            logger.debug(f"[PLP_REGEX_ATTEMPT] Intentando patrón DEATH en línea: '{line[:100]}...'")
+            death_match = self.log_patterns[3].search(line)
+            if death_match:
                 death_message = death_match.group(1)
                 logger.info(f"[PLP_MATCH_DEATH] M: '{death_message}' (L: '{line[:100]}...')")
                 embed = discord.Embed(description=f"💀 {death_message.strip()}", color=discord.Color.dark_grey(), timestamp=current_time_for_embed)
                 await channel.send(embed=embed)
                 logger.info(f"[PLP_SENT_DEATH] Embed DEATH para '{death_message}' enviado.")
-                self.processed_log_timestamps.add(log_identifier)
-                asyncio.create_task(self.save_processed_logs())
+                await self.save_processed_logs()
                 return
-            except IndexError:
-                logger.error(f"[PLP_ERROR_DEATH_INDEX] Grupos: {death_match.groups()}. L: {line[:100]}...", exc_info=True)
-            except Exception as e:
-                logger.error(f"[PLP_ERROR_DEATH_SEND] Excepción: {e}. L: {line[:100]}...", exc_info=True)
-            self.processed_log_timestamps.add(log_identifier)
-            asyncio.create_task(self.save_processed_logs())
-            return
 
-        logger.info(f"[PLP_NO_MATCH_ALL] Línea no coincidió con NINGÚN patrón: '{line[:200]}...'")
-        self.processed_log_timestamps.add(log_identifier) # Marcar como procesada para no reintentar logs que no coinciden
-        # Para logs que no coinciden, guardamos pero con menos frecuencia para no saturar el disco
-        if len(self.processed_log_timestamps) % 10 == 0:  # Guardar cada 10 logs no coincidentes
-            asyncio.create_task(self.save_processed_logs())
+            logger.info(f"[PLP_NO_MATCH_ALL] Línea no coincidió con NINGÚN patrón: '{line[:200]}...'")
+            # Para logs que no coinciden, guardamos pero con menos frecuencia
+            if len(self.processed_log_timestamps) % 10 == 0:
+                await self.save_processed_logs()
+
+        except Exception as e:
+            logger.error(f"[PLP_ERROR] Error procesando línea: {e}", exc_info=True)
+            # No removemos el log_identifier del set para evitar reprocesamiento en caso de error
 
     async def get_server_status(self):
         logger.debug(f"[MinecraftCog] get_server_status: Intentando obtener estado para {self.server_ip}:{self.server_port}")
