@@ -12,6 +12,7 @@ import aiohttp
 import re
 import logging
 from typing import Union
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
@@ -315,26 +316,31 @@ class MinecraftCog(commands.Cog):
             return "❌ RCON no configurado (falta contraseña)"
         
         try:
-            def rcon_blocking_call():
-                logger.debug(f"[MinecraftCog] rcon_blocking_call: Conectando a {self.server_ip}:{self.rcon_port} para comando '{command}'")
+            # Función que se ejecutará en el thread pool
+            def rcon_execute():
                 try:
-                    with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port) as mcr:
-                        response = mcr.command(command)
-                        logger.debug(f"[MinecraftCog] rcon_blocking_call: Comando '{command}' ejecutado, respuesta: '{response[:100]}...'")
-                        return response
+                    with MCRcon(self.server_ip, self.rcon_password, port=self.rcon_port, timeout=5) as mcr:
+                        return mcr.command(command)
                 except Exception as e:
-                    logger.error(f"[MinecraftCog] rcon_blocking_call: Error en thread RCON: {e}")
-                    raise e
+                    logger.error(f"[MinecraftCog] Error en thread RCON: {e}", exc_info=True)
+                    return f"❌ Error de conexión RCON: {str(e)}"
             
-            # Usar ThreadPoolExecutor en lugar de asyncio.to_thread para evitar problemas de señales
-            import concurrent.futures
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                response = await loop.run_in_executor(executor, rcon_blocking_call)
-            return response
+            # Usar executor dedicado para RCON
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rcon_worker") as executor:
+                future = executor.submit(rcon_execute)
+                try:
+                    response = await asyncio.get_event_loop().run_in_executor(None, future.result, 10)  # timeout de 10 segundos
+                    if response is None:
+                        return "❌ No se recibió respuesta del servidor RCON"
+                    return response
+                except concurrent.futures.TimeoutError:
+                    return "❌ Tiempo de espera agotado al ejecutar el comando"
+                except Exception as e:
+                    logger.error(f"[MinecraftCog] Error ejecutando comando RCON '{command}': {e}", exc_info=True)
+                    return f"❌ Error ejecutando comando: {str(e)}"
         except Exception as e:
-            logger.error(f"[MinecraftCog] execute_rcon_command: Error detallado ejecutando comando RCON '{command}':", exc_info=True)
-            return f"❌ Error ejecutando comando: {str(e)}"
+            logger.error(f"[MinecraftCog] Error general en execute_rcon_command: {e}", exc_info=True)
+            return f"❌ Error interno: {str(e)}"
 
     @app_commands.command(name="mcstatus", description="Muestra el estado del servidor de Minecraft")
     async def minecraft_status(self, interaction: Interaction):
